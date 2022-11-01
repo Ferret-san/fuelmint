@@ -1,5 +1,5 @@
 # fuelmint
-**fuelmint** is a blockchain built using Cosmos SDK and Tendermint and created with [Ignite CLI](https://ignite.com/cli).
+**fuelmint** is a scalable and interoperable Fuel library, built using Cosmos SDK and Rollmint and created with [Ignite CLI](https://ignite.com/cli).
 
 ## Get started
 
