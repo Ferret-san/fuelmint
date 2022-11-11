@@ -1,4 +1,4 @@
-//! Example ABCI application, an in-memory key-value store.
+//! FuelVM as an ABCI application
 use std::{
     collections::HashMap,
     future::Future,
