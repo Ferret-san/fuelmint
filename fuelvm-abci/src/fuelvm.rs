@@ -17,7 +17,7 @@ use tower_abci::{split, BoxError, Server};
 
 use fuel_vm::{memory_client::MemoryClient, storage::MemoryStorage, transactor};
 
-/// In-memory, hashmap-backed key-value store ABCI application.
+/// Application State
 #[derive(Clone, Debug)]
 pub struct State<Client> {
     pub block_height: u32,
