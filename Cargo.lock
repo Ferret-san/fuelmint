@@ -1402,19 +1402,6 @@ dependencies = [
 
 [[package]]
 name = "ed25519-consensus"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "758e2a0cd8a6cdf483e1d369e7d081647e00b88d8953e34d8f2cbba05ae28368"
-dependencies = [
- "curve25519-dalek-ng",
- "hex",
- "rand_core 0.6.4",
- "sha2 0.9.9",
- "zeroize",
-]
-
-[[package]]
-name = "ed25519-consensus"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1dd91246c940272326f665724138660a183577ffb77b384a5e10d67d2d5075a"
@@ -1777,6 +1764,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "fuel-core-interfaces"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b9a3b068c3990cbae13131ac8fa53aaea91a8bd22e3c46463d5c9022e885dd7"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "derive_more",
+ "fuel-vm 0.22.2",
+ "futures",
+ "lazy_static",
+ "parking_lot 0.12.1",
+ "secrecy",
+ "tai64",
+ "thiserror",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "fuel-crypto"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1892,9 +1899,9 @@ dependencies = [
 
 [[package]]
 name = "fuel-tx"
-version = "0.23.0"
+version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa4a9936140e5879aa160c2c2a25ff2b9e4fcf8302380849ea934a7c71898b72"
+checksum = "dffd148866f191397915b4a407455ece148197890ce5cf86d4b3f1eedcc7f35e"
 dependencies = [
  "bitflags",
  "derivative",
@@ -1969,7 +1976,7 @@ dependencies = [
  "fuel-crypto",
  "fuel-merkle",
  "fuel-storage",
- "fuel-tx 0.23.0",
+ "fuel-tx 0.23.1",
  "fuel-types",
  "itertools",
  "rand 0.8.5",
@@ -2141,19 +2148,25 @@ dependencies = [
 name = "fuelvm-abci"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
+ "eyre",
  "fuel-core",
+ "fuel-core-interfaces 0.14.1",
+ "fuel-tx 0.23.1",
  "fuel-vm 0.22.2",
  "fuels",
  "futures",
  "pin-project",
  "prost 0.9.0",
+ "serde",
+ "serde_json",
  "structopt",
- "tendermint 0.24.0-pre.2",
- "tendermint-proto 0.24.0-pre.2",
+ "tendermint",
+ "tendermint-proto",
  "tokio",
  "tokio-stream",
- "tokio-util 0.6.10",
+ "tokio-util",
  "tower",
  "tower-abci",
  "tracing",
@@ -3330,16 +3343,6 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71adf41db68aa0daaefc69bb30bcd68ded9b9abaad5d1fbb6304c4fb390e083e"
-dependencies = [
- "bytes",
- "prost-derive 0.10.1",
-]
-
-[[package]]
-name = "prost"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0841812012b2d4a6145fae9a6af1534873c32aa67fff26bd09f8fa42c83f95a"
@@ -3363,19 +3366,6 @@ dependencies = [
 
 [[package]]
 name = "prost-derive"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b670f45da57fb8542ebdbb6105a925fe571b67f9e7ed9f47a06a84e72b4e7cc"
-dependencies = [
- "anyhow",
- "itertools",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "prost-derive"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "164ae68b6587001ca506d3bf7f1000bfa248d0e1217b618108fba4ec1d0cc306"
@@ -3385,16 +3375,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "prost-types"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d0a014229361011dc8e69c8a1ec6c2e8d0f2af7c91e3ea3f5b2170298461e68"
-dependencies = [
- "bytes",
- "prost 0.10.4",
 ]
 
 [[package]]
@@ -4247,6 +4227,9 @@ name = "tai64"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed7401421025f4132e6c1f7af5e7f8287383969f36e6628016cd509b8d3da9dc"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "tempfile"
@@ -4270,13 +4253,13 @@ dependencies = [
  "async-trait",
  "bytes",
  "ed25519",
- "ed25519-consensus 2.0.1",
+ "ed25519-consensus",
  "flex-error",
  "futures",
  "num-traits",
  "once_cell",
  "prost 0.11.2",
- "prost-types 0.11.2",
+ "prost-types",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -4285,36 +4268,7 @@ dependencies = [
  "signature",
  "subtle",
  "subtle-encoding",
- "tendermint-proto 0.23.9",
- "time 0.3.11",
- "zeroize",
-]
-
-[[package]]
-name = "tendermint"
-version = "0.24.0-pre.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c321f411bdfb772bca0c5d9c94d8f45e3a992fae44baa60d17b99d8aaae58d04"
-dependencies = [
- "async-trait",
- "bytes",
- "ed25519",
- "ed25519-consensus 1.2.1",
- "flex-error",
- "futures",
- "num-traits",
- "once_cell",
- "prost 0.10.4",
- "prost-types 0.10.1",
- "serde",
- "serde_bytes",
- "serde_json",
- "serde_repr",
- "sha2 0.9.9",
- "signature",
- "subtle",
- "subtle-encoding",
- "tendermint-proto 0.24.0-pre.2",
+ "tendermint-proto",
  "time 0.3.11",
  "zeroize",
 ]
@@ -4329,25 +4283,7 @@ dependencies = [
  "num-derive",
  "num-traits",
  "prost 0.11.2",
- "prost-types 0.11.2",
- "serde",
- "serde_bytes",
- "subtle-encoding",
- "time 0.3.11",
-]
-
-[[package]]
-name = "tendermint-proto"
-version = "0.24.0-pre.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5820a81dfb85011220d2b24323870ad30a56ae446f92b170911574c79d385bc5"
-dependencies = [
- "bytes",
- "flex-error",
- "num-derive",
- "num-traits",
- "prost 0.10.4",
- "prost-types 0.10.1",
+ "prost-types",
  "serde",
  "serde_bytes",
  "subtle-encoding",
@@ -4532,20 +4468,6 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.6.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36943ee01a6d67977dd3f84a5a1d2efeb4ada3a1ae771cadfaa535d9d9fc6507"
-dependencies = [
- "bytes",
- "futures-core",
- "futures-sink",
- "log",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
-name = "tokio-util"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bb2e075f03b3d66d8d8785356224ba688d2906a371015e225beeb65ca92c740"
@@ -4582,7 +4504,7 @@ dependencies = [
  "rand 0.8.5",
  "slab",
  "tokio",
- "tokio-util 0.7.4",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -4597,11 +4519,11 @@ dependencies = [
  "futures",
  "pin-project",
  "prost 0.11.2",
- "tendermint 0.23.9",
- "tendermint-proto 0.23.9",
+ "tendermint",
+ "tendermint-proto",
  "tokio",
  "tokio-stream",
- "tokio-util 0.7.4",
+ "tokio-util",
  "tower",
  "tracing",
 ]
