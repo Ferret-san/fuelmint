@@ -1,5 +1,7 @@
 //! FuelVM as an ABCI application
 use std::{
+    fmt,
+    fmt::Debug,
     future::Future,
     pin::Pin,
     sync::Arc,
@@ -33,28 +35,78 @@ use fuel_vm::{prelude::Word, storage::MemoryStorage};
 
 use fuel_core_interfaces::{common::state::StateTransition, executor::Error as ExecutionError};
 
-use fuel_tx::{Checked, CheckedTransaction, IntoChecked, Transaction};
+use fuel_tx::{Bytes32, Checked, CheckedTransaction, IntoChecked, Transaction};
 
-use fuel_core::chain_config::ChainConfig;
+use fuel_core::{
+    chain_config::ChainConfig,
+    database::Database,
+    executor::Executor as FuelExecutor,
+    model::{BlockHeight, DaBlockHeight},
+    schema::block::Block,
+    service::Config,
+};
 
-/// The app's state, containing a FuelVM
-#[derive(Clone, Debug)]
-pub struct State<Db> {
-    pub block_height: i64,
-    pub app_hash: Vec<u8>,
-    pub db: Db,
-    pub config: ChainConfig,
+/// Create a wrapper around fuel's Executor
+pub struct Executor {
+    pub producer: FuelExecutor,
 }
 
-/// uses rocksdb when rocksdb features are enabled
-/// uses in-memory when rocksdb features are disabled
-impl Default for State<MemoryStorage> {
+impl Executor {
+    pub fn new(producer: FuelExecutor) -> Self {
+        Self { producer: producer }
+    }
+}
+
+impl Debug for Executor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Executor")
+            .field("database", &self.producer.database)
+            .field("config", &self.producer.config)
+            .finish()
+    }
+}
+
+impl Clone for Executor {
+    fn clone(&self) -> Executor {
+        Executor {
+            producer: FuelExecutor {
+                database: self.producer.database.clone(),
+                config: self.producer.config.clone(),
+            },
+        }
+    }
+}
+
+impl Default for Executor {
+    fn default() -> Self {
+        Executor::new(FuelExecutor {
+            database: Database::default(),
+            config: Config::local_node(),
+        })
+    }
+}
+
+impl From<FuelExecutor> for Executor {
+    fn from(producer: FuelExecutor) -> Self {
+        Executor::new(producer)
+    }
+}
+/// The app's state, containing a FuelVM
+#[derive(Clone, Debug)]
+pub struct State {
+    pub block_height: i64,
+    pub app_hash: Vec<u8>,
+    pub transactions: Vec<Transaction>,
+    pub executor: Executor,
+}
+
+impl Default for State {
     fn default() -> Self {
         Self {
             block_height: 0,
             app_hash: Vec::new(),
-            db: MemoryStorage::default(),
-            config: ChainConfig::default(),
+            transactions: Vec::new(),
+            executor: Executor::default(),
         }
     }
 }
@@ -66,57 +118,27 @@ pub struct TransactionResult {
     result: Option<ProgramState>,
 }
 
-impl State<MemoryStorage> {
-    fn into_checked_basic(&self, tx: Transaction) -> eyre::Result<CheckedTransaction> {
-        let checked_tx: CheckedTransaction = tx
-            .clone()
-            .into_checked_basic(
-                self.block_height as Word,
-                &self.config.transaction_parameters,
-            )?
-            .into();
+struct PreviousBlockInfo {
+    prev_root: Bytes32,
+    da_height: DaBlockHeight,
+}
 
-        Ok(checked_tx)
-    }
-
-    fn execute<Tx>(&mut self, checked_tx: Checked<Tx>) -> Result<TransactionResult, ExecutionError>
-    where
-        Tx: ExecutableTransaction + PartialEq,
-        <Tx as IntoChecked>::Metadata: CheckedMetadata + Clone,
-    {
-        let tx_id = checked_tx.transaction().id();
-
-        let mut vm = Interpreter::with_storage(&mut self.db, self.config.transaction_parameters);
-
-        let vm_result: StateTransition<_> = vm
-            .transact(checked_tx.clone())
-            .map_err(|error| ExecutionError::VmExecution {
-                error,
-                transaction_id: tx_id,
-            })?
-            .into();
-
-        if !vm_result.should_revert() {
-            self.db.commit();
+impl State {
+    fn previous_block_info(&self, height: BlockHeight) -> Result<PreviousBlockInfo> {
+        // block 0 is reserved for genesis
+        if height == 0u32.into() {
+            Err(GenesisBlock.into())
         }
-
-        self.db.persist();
-
-        Ok(TransactionResult {
-            transaction: vm_result.tx().clone().into(),
-            gas: vm_result.tx().price(),
-            result: Some(*vm_result.state()),
-        })
     }
 }
 
 // The Application
-pub struct App<Db> {
-    pub committed_state: Arc<Mutex<State<Db>>>,
-    pub current_state: Arc<Mutex<State<Db>>>,
+pub struct App {
+    pub committed_state: Arc<Mutex<State>>,
+    pub current_state: Arc<Mutex<State>>,
 }
 
-impl Default for App<MemoryStorage> {
+impl Default for App {
     fn default() -> Self {
         Self {
             committed_state: Arc::new(Mutex::new(State::default())),
@@ -125,8 +147,8 @@ impl Default for App<MemoryStorage> {
     }
 }
 
-impl<Db: Clone> App<Db> {
-    pub fn new(state: State<Db>) -> Self {
+impl App {
+    pub fn new(state: State) -> Self {
         let committed_state = Arc::new(Mutex::new(state.clone()));
         let current_state = Arc::new(Mutex::new(state));
 
@@ -137,8 +159,9 @@ impl<Db: Clone> App<Db> {
     }
 }
 
-// TODO: Implement all ABCI methods
-impl App<MemoryStorage> {
+// TODO: Implement more ABCI methods
+// CheckTx -> check for basic requirements like signatures (maybe check inputs and outputs?)
+impl App {
     async fn info(&self) -> response::Info {
         let state = self.current_state.lock().await;
 
@@ -151,7 +174,6 @@ impl App<MemoryStorage> {
         }
     }
 
-    // Should I worry about coinbase transactions? fees? etc?
     async fn deliver_tx(&mut self, deliver_tx_request: Bytes) -> response::DeliverTx {
         tracing::trace!("delivering tx");
         let mut state = self.current_state.lock().await;
@@ -167,29 +189,14 @@ impl App<MemoryStorage> {
             }
         };
 
-        let checked_tx = state.into_checked_basic(tx).unwrap();
+        let tx_string = tx.to_json();
+        // Ad tx to our list of transactions to be executed
+        state.transactions.push(tx);
 
-        let result: TransactionResult;
-
-        match checked_tx {
-            CheckedTransaction::Script(script) => result = state.execute(script).unwrap(),
-            CheckedTransaction::Create(create) => result = state.execute(create).unwrap(),
-            CheckedTransaction::Mint(_) => {
-                // Right now, we only support `Mint` transactions for coinbase,
-                // which are processed separately as a first transaction.
-                //
-                // All other `Mint` transaction is not allowed.
-                return response::DeliverTx {
-                    data: "transaction not support".into(),
-                    ..Default::default()
-                };
-            }
-        }
-
-        tracing::trace!("executed tx");
+        tracing::trace!("tx delivered");
 
         response::DeliverTx {
-            data: Bytes::from(serde_json::to_vec(&result).unwrap()),
+            data: Bytes::from(tx_string),
             ..Default::default()
         }
     }
@@ -197,8 +204,10 @@ impl App<MemoryStorage> {
     async fn end_block(&mut self, end_block_request: EndBlock) -> response::EndBlock {
         tracing::trace!("ending block");
         let mut current_state = self.current_state.lock().await;
+        // Set block height
         current_state.block_height = end_block_request.height;
-        current_state.app_hash = vec![];
+        // Create a partial fuel block header
+        let header = current_state.app_hash = vec![];
         tracing::trace!("done");
 
         response::EndBlock::default()
@@ -212,8 +221,8 @@ impl App<MemoryStorage> {
         tracing::trace!("committed");
 
         response::Commit {
-            data: Bytes::from((*committed_state).app_hash.clone()),
-            retain_height: Height::from(0 as u32),
+            data: Bytes::from(vec![]), // (*committed_state).app_hash.clone(),
+            retain_height: 0u32.into(),
         }
     }
 
@@ -244,7 +253,7 @@ impl App<MemoryStorage> {
     // }
 }
 
-impl Service<Request> for App<MemoryStorage> {
+impl Service<Request> for App {
     type Response = Response;
     type Error = BoxError;
     type Future = Pin<Box<dyn Future<Output = Result<Response, BoxError>> + Send + 'static>>;
