@@ -6,6 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+rand = "0.8.5"
+fuel-tx = "0.23.0"
 tendermint = { git = "https://github.com/penumbra-zone/tendermint-rs", branch = "penumbra-034" }
 tendermint-proto = { git = "https://github.com/penumbra-zone/tendermint-rs", branch = "penumbra-034" }
 structopt = "0.3.26"
@@ -23,9 +25,9 @@ tower-abci = { git = "https://github.com/penumbra-zone/tower-abci/", branch = "p
 fuel-vm = "0.22.2"
 fuel-core = "0.13.1"
 fuels = "0.27.0"
-fuel-tx = "0.23.1"
 serde_json = "1.0.82"
 serde = { version = "1.0.138", features = ["derive"] }
 eyre = "0.6.8"
 fuel-core-interfaces = "0.14.1"
 async-trait = "0.1.58"
+fuel-crypto = "0.6.2"

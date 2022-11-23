@@ -15,7 +15,7 @@ use tower::{Service, ServiceBuilder};
 
 use tendermint::{
     abci::{
-        request::{EndBlock, Query, Request},
+        request::{DeliverTx, EndBlock, Request},
         response, Response,
     },
     block::Height,
@@ -33,9 +33,12 @@ use fuel_vm::{prelude::Word, storage::MemoryStorage};
 
 use fuel_core_interfaces::{common::state::StateTransition, executor::Error as ExecutionError};
 
+//
 use fuel_tx::{Checked, CheckedTransaction, IntoChecked, Transaction};
 
 use fuel_core::chain_config::ChainConfig;
+
+use fuel_vm::prelude::*;
 
 /// The app's state, containing a FuelVM
 #[derive(Clone, Debug)]
@@ -64,6 +67,8 @@ pub struct TransactionResult {
     transaction: Transaction,
     gas: u64,
     result: Option<ProgramState>,
+    reverted: bool,
+    receipts: Vec<Receipt>,
 }
 
 impl State<MemoryStorage> {
@@ -106,6 +111,8 @@ impl State<MemoryStorage> {
             transaction: vm_result.tx().clone().into(),
             gas: vm_result.tx().price(),
             result: Some(*vm_result.state()),
+            reverted: vm_result.should_revert(),
+            receipts: vm_result.receipts().to_vec(),
         })
     }
 }
@@ -152,11 +159,11 @@ impl App<MemoryStorage> {
     }
 
     // Should I worry about coinbase transactions? fees? etc?
-    async fn deliver_tx(&mut self, deliver_tx_request: Bytes) -> response::DeliverTx {
+    async fn deliver_tx(&mut self, deliver_tx_request: DeliverTx) -> response::DeliverTx {
         tracing::trace!("delivering tx");
         let mut state = self.current_state.lock().await;
 
-        let tx: Transaction = match serde_json::from_slice(&deliver_tx_request) {
+        let tx: Transaction = match serde_json::from_slice(&deliver_tx_request.tx) {
             Ok(tx) => tx,
             Err(_) => {
                 tracing::error!("could not decode request");
@@ -268,7 +275,7 @@ impl Service<Request> for App<MemoryStorage> {
             // Need to handle query
             Request::Query(_) => Response::Query(Default::default()),
             Request::DeliverTx(deliver_tx) => {
-                Response::DeliverTx(runtime.block_on(self.deliver_tx(deliver_tx.tx)))
+                Response::DeliverTx(runtime.block_on(self.deliver_tx(deliver_tx)))
             }
             Request::Commit => Response::Commit(runtime.block_on(self.commit())),
             // unhandled messages
@@ -344,4 +351,108 @@ async fn main() {
         .listen(format!("{}:{}", opt.host, opt.port))
         .await
         .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use fuel_vm::consts::*;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+    use tendermint::abci::request::DeliverTx;
+
+    #[tokio::test]
+    async fn run_tx() {
+        println!("Running a transaction through an ABCI request...");
+        let mut app = App::default();
+
+        let rng = &mut StdRng::seed_from_u64(2322u64);
+
+        let gas_price = 0;
+        let gas_limit = 1_000_000;
+        let maturity = 0;
+        let height = 0;
+
+        let secret = SecretKey::random(rng);
+        let public = secret.public_key();
+
+        let message = b"The gift of words is the gift of deception and illusion.";
+        let message = Message::new(message);
+
+        let signature = Signature::sign(&secret, &message);
+
+        #[rustfmt::skip]
+        let script: Vec<u8> = vec![
+            Opcode::gtf(0x20, 0x00, GTFArgs::ScriptData),
+            Opcode::ADDI(0x21, 0x20, signature.as_ref().len() as Immediate12),
+            Opcode::ADDI(0x22, 0x21, message.as_ref().len() as Immediate12),
+            Opcode::MOVI(0x10, PublicKey::LEN as Immediate18),
+            Opcode::ALOC(0x10),
+            Opcode::ADDI(0x11, REG_HP, 1),
+            Opcode::ECR(0x11, 0x20, 0x21),
+            Opcode::MEQ(0x12, 0x22, 0x11, 0x10),
+            Opcode::LOG(0x12, 0x00, 0x00, 0x00),
+            Opcode::RET(REG_ONE),
+        ].into_iter().collect();
+
+        let script_data: Vec<u8> = signature
+            .as_ref()
+            .iter()
+            .copied()
+            .chain(message.as_ref().iter().copied())
+            .chain(public.as_ref().iter().copied())
+            .collect();
+
+        let tx: Transaction = Transaction::script(
+            gas_price,
+            gas_limit,
+            maturity,
+            script,
+            script_data,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        )
+        .into();
+
+        println!("Transaction to send over ABCI: {:?}", tx);
+
+        // send our tx over ABCI
+
+        let req = DeliverTx {
+            tx: Bytes::from(serde_json::to_vec(&tx).unwrap()),
+        };
+
+        let res = app.deliver_tx(req).await;
+        let res: TransactionResult = serde_json::from_slice(&res.data).unwrap();
+
+        // tx passed
+        assert_eq!(res.reverted, false);
+
+        println!("Transaction didn't revert");
+
+        let receipts = &res.receipts[..];
+
+        println!("Receipts: {:?}", receipts);
+
+        let success = receipts
+            .iter()
+            .any(|r| matches!(r, Receipt::Log{ ra, .. } if *ra == 1));
+
+        assert!(success);
+
+        println!("Transaction was succesful!");
+
+        // tx.gas_price(gas_price)
+        //     .gas_limit(gas_limit)
+        //     .maturity(maturity)
+        //     .finalize_checked(height, &params);
+
+        // let tx = TransactionBuilder::script(script, script_data)
+        //     .gas_price(gas_price)
+        //     .gas_limit(gas_limit)
+        //     .maturity(maturity)
+        //     .finalize_checked(height, &params);
+    }
 }
