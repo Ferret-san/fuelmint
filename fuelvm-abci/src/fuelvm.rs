@@ -1,12 +1,15 @@
 //! FuelVM as an ABCI application
 use std::{
-    fmt,
     fmt::Debug,
     future::Future,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
 };
+
+use crate::executor::*;
+
+use anyhow::{Context as ContextTrait, Result};
 
 use tokio::sync::Mutex;
 
@@ -17,7 +20,7 @@ use tower::{Service, ServiceBuilder};
 
 use tendermint::{
     abci::{
-        request::{EndBlock, Query, Request},
+        request::{EndBlock, Request},
         response, Response,
     },
     block::Height,
@@ -25,72 +28,25 @@ use tendermint::{
 
 use tower_abci::{split, BoxError, Server};
 
-use fuel_vm::{
-    interpreter::CheckedMetadata,
-    prelude::{ExecutableTransaction, Interpreter},
-    state::ProgramState,
+use fuel_vm::state::ProgramState;
+
+use fuel_core_interfaces::{
+    block_producer::{
+        Error::{GenesisBlock, InvalidDaFinalizationState, MissingBlock},
+        Relayer as RelayerTrait,
+    },
+    common::{crypto::ephemeral_merkle_root, tai64::Tai64},
+    executor::{ExecutionBlock, Executor as ExecutorTrait},
+    model::{
+        BlockHeight, DaBlockHeight, FuelApplicationHeader, FuelConsensusHeader, PartialFuelBlock,
+        PartialFuelBlockHeader,
+    },
 };
 
-use fuel_vm::{prelude::Word, storage::MemoryStorage};
+use fuel_tx::{Bytes32, Transaction};
 
-use fuel_core_interfaces::{common::state::StateTransition, executor::Error as ExecutionError};
+use fuel_block_producer::db::BlockProducerDatabase;
 
-use fuel_tx::{Bytes32, Checked, CheckedTransaction, IntoChecked, Transaction};
-
-use fuel_core::{
-    chain_config::ChainConfig,
-    database::Database,
-    executor::Executor as FuelExecutor,
-    model::{BlockHeight, DaBlockHeight},
-    schema::block::Block,
-    service::Config,
-};
-
-/// Create a wrapper around fuel's Executor
-pub struct Executor {
-    pub producer: FuelExecutor,
-}
-
-impl Executor {
-    pub fn new(producer: FuelExecutor) -> Self {
-        Self { producer: producer }
-    }
-}
-
-impl Debug for Executor {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Executor")
-            .field("database", &self.producer.database)
-            .field("config", &self.producer.config)
-            .finish()
-    }
-}
-
-impl Clone for Executor {
-    fn clone(&self) -> Executor {
-        Executor {
-            producer: FuelExecutor {
-                database: self.producer.database.clone(),
-                config: self.producer.config.clone(),
-            },
-        }
-    }
-}
-
-impl Default for Executor {
-    fn default() -> Self {
-        Executor::new(FuelExecutor {
-            database: Database::default(),
-            config: Config::local_node(),
-        })
-    }
-}
-
-impl From<FuelExecutor> for Executor {
-    fn from(producer: FuelExecutor) -> Self {
-        Executor::new(producer)
-    }
-}
 /// The app's state, containing a FuelVM
 #[derive(Clone, Debug)]
 pub struct State {
@@ -118,6 +74,7 @@ pub struct TransactionResult {
     result: Option<ProgramState>,
 }
 
+// TODO: get this struct from `fuel_block_producer`
 struct PreviousBlockInfo {
     prev_root: Bytes32,
     da_height: DaBlockHeight,
@@ -129,39 +86,116 @@ impl State {
         if height == 0u32.into() {
             Err(GenesisBlock.into())
         }
-    }
-}
+        // if this is the first block, fill in base metadata from genesis
+        else if height == 1u32.into() {
+            // TODO: what should initial genesis data be here?
+            Ok(PreviousBlockInfo {
+                prev_root: Default::default(),
+                da_height: Default::default(),
+            })
+        } else {
+            // get info from previous block height
+            let prev_height = height - 1u32.into();
+            let previous_block = self
+                .executor
+                .producer
+                .database
+                .get_block(prev_height)?
+                .ok_or(MissingBlock(prev_height))?;
+            // TODO: this should use a proper BMT MMR
+            let hash = previous_block.id();
+            let prev_root =
+                ephemeral_merkle_root(vec![*previous_block.header.prev_root(), hash.into()].iter());
 
-// The Application
-pub struct App {
-    pub committed_state: Arc<Mutex<State>>,
-    pub current_state: Arc<Mutex<State>>,
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self {
-            committed_state: Arc::new(Mutex::new(State::default())),
-            current_state: Arc::new(Mutex::new(State::default())),
+            Ok(PreviousBlockInfo {
+                prev_root,
+                da_height: previous_block.header.da_height,
+            })
         }
     }
 }
 
-impl App {
-    pub fn new(state: State) -> Self {
+// The Application
+pub struct App<Relayer: RelayerTrait> {
+    pub committed_state: Arc<Mutex<State>>,
+    pub current_state: Arc<Mutex<State>>,
+    pub relayer: Option<Relayer>,
+}
+
+impl<Relayer: RelayerTrait> Default for App<Relayer> {
+    fn default() -> Self {
+        Self {
+            committed_state: Arc::new(Mutex::new(State::default())),
+            current_state: Arc::new(Mutex::new(State::default())),
+            relayer: None,
+        }
+    }
+}
+
+impl<Relayer: RelayerTrait> App<Relayer> {
+    pub fn new(state: State, relayer: Relayer) -> Self {
         let committed_state = Arc::new(Mutex::new(state.clone()));
         let current_state = Arc::new(Mutex::new(state));
 
         App {
             committed_state,
             current_state,
+            relayer: Some(relayer),
+        }
+    }
+
+    /// Create the header for a new block at the provided height
+    async fn new_header(&self, height: BlockHeight) -> Result<PartialFuelBlockHeader> {
+        let state = self.current_state.lock().await;
+        let previous_block_info = state.previous_block_info(height)?;
+        let new_da_height = self
+            .select_new_da_height(previous_block_info.da_height)
+            .await?;
+
+        Ok(PartialFuelBlockHeader {
+            application: FuelApplicationHeader {
+                da_height: new_da_height,
+                generated: Default::default(),
+            },
+            consensus: FuelConsensusHeader {
+                // TODO: this needs to be updated using a proper BMT MMR
+                prev_root: previous_block_info.prev_root,
+                height,
+                time: Tai64::now(),
+                generated: Default::default(),
+            },
+            metadata: None,
+        })
+    }
+
+    async fn select_new_da_height(
+        &self,
+        previous_da_height: DaBlockHeight,
+    ) -> Result<DaBlockHeight> {
+        match &self.relayer {
+            Some(relayer) => {
+                let best_height = relayer.get_best_finalized_da_height().await?;
+                if best_height < previous_da_height {
+                    // If this happens, it could mean a block was erroneously imported
+                    // without waiting for our relayer's da_height to catch up to imported da_height.
+                    return Err(InvalidDaFinalizationState {
+                        best: best_height,
+                        previous_block: previous_da_height,
+                    }
+                    .into());
+                }
+                Ok(best_height)
+            }
+            // If we do not have a relayer, we can just return zero
+            // Meaning we dont process deposits/withdrawals or messages from some settlement layer / L1
+            None => Ok(DaBlockHeight::from(0u64)),
         }
     }
 }
 
 // TODO: Implement more ABCI methods
 // CheckTx -> check for basic requirements like signatures (maybe check inputs and outputs?)
-impl App {
+impl<Relayer: RelayerTrait> App<Relayer> {
     async fn info(&self) -> response::Info {
         let state = self.current_state.lock().await;
 
@@ -204,12 +238,36 @@ impl App {
     async fn end_block(&mut self, end_block_request: EndBlock) -> response::EndBlock {
         tracing::trace!("ending block");
         let mut current_state = self.current_state.lock().await;
+
         // Set block height
         current_state.block_height = end_block_request.height;
-        // Create a partial fuel block header
-        let header = current_state.app_hash = vec![];
-        tracing::trace!("done");
 
+        // Create a partial fuel block header
+        let header = self
+            .new_header(BlockHeight::from(current_state.block_height as u64))
+            .await
+            .unwrap();
+
+        // Build a block for exeuction using the header and our vec of transactions
+        let block = PartialFuelBlock::new(header, current_state.transactions.clone());
+
+        // Store the context string incase we error.
+        let context_string = format!(
+            "Failed to produce block {:?} due to execution failure",
+            block
+        );
+        let result = current_state
+            .executor
+            .producer
+            .execute(ExecutionBlock::Production(block))
+            .context(context_string)
+            .unwrap();
+
+        tracing::trace!("done executing the block");
+        tracing::debug!("Produced block with result: {:?}", &result);
+        // Clear the transactions vec
+        current_state.transactions.clear();
+        // Should I make an event that returns the Execution Result?
         response::EndBlock::default()
     }
 
@@ -253,7 +311,19 @@ impl App {
     // }
 }
 
-impl Service<Request> for App {
+#[derive(Default, Clone)]
+pub struct EmptyRelayer {
+    pub zero_height: DaBlockHeight,
+}
+
+#[async_trait::async_trait]
+impl RelayerTrait for EmptyRelayer {
+    async fn get_best_finalized_da_height(&self) -> Result<DaBlockHeight> {
+        Ok(self.zero_height)
+    }
+}
+
+impl Service<Request> for App<EmptyRelayer> {
     type Response = Response;
     type Error = BoxError;
     type Future = Pin<Box<dyn Future<Output = Result<Response, BoxError>> + Send + 'static>>;
