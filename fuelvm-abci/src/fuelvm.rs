@@ -47,6 +47,12 @@ use fuel_tx::{Bytes32, Transaction};
 
 use fuel_block_producer::db::BlockProducerDatabase;
 
+/// TODO
+/// 1. Connect the FuelClient to my app for GraphQL queries and mutations
+/// 2. Make usre I initialize a database and what not
+/// 3. Initialize the Fuel Service
+/// 4. Connect the Client with the service
+
 /// The app's state, containing a FuelVM
 #[derive(Clone, Debug)]
 pub struct State {
@@ -65,13 +71,6 @@ impl Default for State {
             executor: Executor::default(),
         }
     }
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-pub struct TransactionResult {
-    transaction: Transaction,
-    gas: u64,
-    result: Option<ProgramState>,
 }
 
 // TODO: get this struct from `fuel_block_producer`
@@ -194,7 +193,7 @@ impl<Relayer: RelayerTrait> App<Relayer> {
 }
 
 // TODO: Implement more ABCI methods
-// CheckTx -> check for basic requirements like signatures (maybe check inputs and outputs?)
+// TODO: Implement dry_run as a Query
 impl<Relayer: RelayerTrait> App<Relayer> {
     async fn info(&self) -> response::Info {
         let state = self.current_state.lock().await;
@@ -207,6 +206,8 @@ impl<Relayer: RelayerTrait> App<Relayer> {
             last_block_app_hash: state.app_hash.to_vec().into(),
         }
     }
+
+    // TODO: Add CheckTx for basic requirements like signatures (maybe check inputs and outputs?)
 
     async fn deliver_tx(&mut self, deliver_tx_request: Bytes) -> response::DeliverTx {
         tracing::trace!("delivering tx");
