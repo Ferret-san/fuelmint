@@ -7,9 +7,11 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::executor::*;
+use crate::state::*;
 
-use anyhow::{Context as ContextTrait, Result};
+use crate::queries::*;
+
+use anyhow::{anyhow, Context as ContextTrait, Result};
 
 use tokio::sync::Mutex;
 
@@ -20,7 +22,7 @@ use tower::{Service, ServiceBuilder};
 
 use tendermint::{
     abci::{
-        request::{EndBlock, Request},
+        request::{EndBlock, Query as RequestQuery, Request},
         response, Response,
     },
     block::Height,
@@ -28,14 +30,11 @@ use tendermint::{
 
 use tower_abci::{split, BoxError, Server};
 
-use fuel_vm::state::ProgramState;
+//use fuel_core::schema::balance::{Balance, BalanceQuery};
 
 use fuel_core_interfaces::{
-    block_producer::{
-        Error::{GenesisBlock, InvalidDaFinalizationState, MissingBlock},
-        Relayer as RelayerTrait,
-    },
-    common::{crypto::ephemeral_merkle_root, tai64::Tai64},
+    block_producer::{Error::InvalidDaFinalizationState, Relayer as RelayerTrait},
+    common::tai64::Tai64,
     executor::{ExecutionBlock, Executor as ExecutorTrait},
     model::{
         BlockHeight, DaBlockHeight, FuelApplicationHeader, FuelConsensusHeader, PartialFuelBlock,
@@ -43,7 +42,7 @@ use fuel_core_interfaces::{
     },
 };
 
-use fuel_tx::{Bytes32, Transaction};
+use fuel_tx::{Receipt, Transaction};
 
 use fuel_block_producer::db::BlockProducerDatabase;
 
@@ -52,67 +51,6 @@ use fuel_block_producer::db::BlockProducerDatabase;
 /// 2. Make usre I initialize a database and what not
 /// 3. Initialize the Fuel Service
 /// 4. Connect the Client with the service
-
-/// The app's state, containing a FuelVM
-#[derive(Clone, Debug)]
-pub struct State {
-    pub block_height: i64,
-    pub app_hash: Vec<u8>,
-    pub transactions: Vec<Transaction>,
-    pub executor: Executor,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            block_height: 0,
-            app_hash: Vec::new(),
-            transactions: Vec::new(),
-            executor: Executor::default(),
-        }
-    }
-}
-
-// TODO: get this struct from `fuel_block_producer`
-struct PreviousBlockInfo {
-    prev_root: Bytes32,
-    da_height: DaBlockHeight,
-}
-
-impl State {
-    fn previous_block_info(&self, height: BlockHeight) -> Result<PreviousBlockInfo> {
-        // block 0 is reserved for genesis
-        if height == 0u32.into() {
-            Err(GenesisBlock.into())
-        }
-        // if this is the first block, fill in base metadata from genesis
-        else if height == 1u32.into() {
-            // TODO: what should initial genesis data be here?
-            Ok(PreviousBlockInfo {
-                prev_root: Default::default(),
-                da_height: Default::default(),
-            })
-        } else {
-            // get info from previous block height
-            let prev_height = height - 1u32.into();
-            let previous_block = self
-                .executor
-                .producer
-                .database
-                .get_block(prev_height)?
-                .ok_or(MissingBlock(prev_height))?;
-            // TODO: this should use a proper BMT MMR
-            let hash = previous_block.id();
-            let prev_root =
-                ephemeral_merkle_root(vec![*previous_block.header.prev_root(), hash.into()].iter());
-
-            Ok(PreviousBlockInfo {
-                prev_root,
-                da_height: previous_block.header.da_height,
-            })
-        }
-    }
-}
 
 // The Application
 pub struct App<Relayer: RelayerTrait> {
@@ -190,10 +128,40 @@ impl<Relayer: RelayerTrait> App<Relayer> {
             None => Ok(DaBlockHeight::from(0u64)),
         }
     }
+
+    async fn dry_run(&self, tx: Transaction) -> Result<Vec<Receipt>> {
+        let state = self.current_state.lock().await;
+
+        let height = state
+            .executor
+            .producer
+            .database
+            .current_block_height()
+            .unwrap();
+
+        let is_script = tx.is_script();
+        let header = self.new_header(height).await.unwrap();
+        let block = PartialFuelBlock::new(header, vec![tx].into_iter().collect());
+
+        let result: Vec<_> = state
+            .executor
+            .producer
+            .dry_run(
+                ExecutionBlock::Production(block),
+                Some(state.executor.producer.config.utxo_validation),
+            )
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+
+        if is_script && result.is_empty() {
+            return Err(anyhow!("Expected at least one set of receipts"));
+        }
+        Ok(result)
+    }
 }
 
-// TODO: Implement more ABCI methods
-// TODO: Implement dry_run as a Query
 impl<Relayer: RelayerTrait> App<Relayer> {
     async fn info(&self) -> response::Info {
         let state = self.current_state.lock().await;
@@ -285,31 +253,50 @@ impl<Relayer: RelayerTrait> App<Relayer> {
         }
     }
 
-    // Paradigm replicated the eth_call interface
-    // what's the Fuel equivalent?
-    // async fn query(&self, query_request: Query) -> response::Query {
-    //     let state = self.current_state.lock().await;
+    async fn query(&self, query_request: RequestQuery) -> response::Query {
+        let state = self.current_state.lock().await;
 
-    //     // TODO: Implement a type for the available queries
-    //     let query = match serde_json::from_slice(&query_request.data) {
-    //         Ok(tx) => tx,
-    //         // no-op just logger
-    //         Err(_) => {
-    //             return response::Query {
-    //                 value: "could not decode request".into(),
-    //                 ..Default::default()
-    //             };
-    //         }
-    //     };
+        let query: Query = match serde_json::from_slice(&query_request.data) {
+            Ok(tx) => tx,
+            // no-op just logger
+            Err(_) => {
+                return response::Query {
+                    value: "could not decode request".into(),
+                    ..Default::default()
+                };
+            }
+        };
 
-    //     // Use dry_run, return the response to the query
+        let res = match query {
+            Query::DryRun(tx) => {
+                let result = self.dry_run(tx).await.unwrap();
 
-    //     response::Query {
-    //         key: query_request.data,
-    //         // value
-    //         ..Default::default()
-    //     }
-    // }
+                QueryResponse::Receipts(result)
+            }
+            Query::Balance(address, asset_id) => QueryResponse::Balance(
+                state
+                    .balance(
+                        address.to_string().as_str(),
+                        Some(asset_id.to_string().as_str()),
+                    )
+                    .unwrap(),
+            ),
+            Query::ContractBalance(contract_id, asset_id) => QueryResponse::ContractBalance(
+                state
+                    .contract_balance(
+                        contract_id.to_string().as_str(),
+                        Some(asset_id.to_string().as_str()),
+                    )
+                    .unwrap(),
+            ),
+        };
+
+        response::Query {
+            key: query_request.data,
+            value: Bytes::from(serde_json::to_vec(&res).unwrap()),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -345,8 +332,7 @@ impl Service<Request> for App<EmptyRelayer> {
         let rsp = match req {
             // handled messages
             Request::Info(_) => Response::Info(runtime.block_on(self.info())),
-            // Need to handle query
-            Request::Query(_) => Response::Query(Default::default()),
+            Request::Query(query) => Response::Query(runtime.block_on(self.query(query))),
             Request::DeliverTx(deliver_tx) => {
                 Response::DeliverTx(runtime.block_on(self.deliver_tx(deliver_tx.tx)))
             }

@@ -1,5 +1,7 @@
 use fuel_core::{database::Database, executor::Executor as FuelExecutor, service::Config};
+
 use std::{fmt, fmt::Debug};
+
 /// Create a wrapper around fuel's Executor
 pub struct Executor {
     pub producer: FuelExecutor,
