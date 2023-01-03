@@ -1,2 +1,2 @@
 [workspace]
-members = ["fuelvm-abci"]
+members = ["fuelvm-abc"]
