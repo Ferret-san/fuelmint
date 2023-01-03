@@ -1,6 +1,5 @@
 //! FuelVM as an ABCI application
 use std::{
-    fmt::Debug,
     future::Future,
     pin::Pin,
     sync::Arc,
@@ -16,9 +15,8 @@ use anyhow::{anyhow, Context as ContextTrait, Result};
 use tokio::sync::Mutex;
 
 use bytes::Bytes;
-use futures::future::FutureExt;
-use structopt::StructOpt;
-use tower::{Service, ServiceBuilder};
+use futures::{executor, future::FutureExt};
+use tower::Service;
 
 use tendermint::{
     abci::{
@@ -28,7 +26,7 @@ use tendermint::{
     block::Height,
 };
 
-use tower_abci::{split, BoxError, Server};
+use tower_abci::BoxError;
 
 //use fuel_core::schema::balance::{Balance, BalanceQuery};
 
@@ -53,6 +51,7 @@ use fuel_block_producer::db::BlockProducerDatabase;
 /// 4. Connect the Client with the service
 
 // The Application
+#[derive(Clone)]
 pub struct App<Relayer: RelayerTrait> {
     pub committed_state: Arc<Mutex<State>>,
     pub current_state: Arc<Mutex<State>>,
@@ -176,7 +175,6 @@ impl<Relayer: RelayerTrait> App<Relayer> {
     }
 
     // TODO: Add CheckTx for basic requirements like signatures (maybe check inputs and outputs?)
-
     async fn deliver_tx(&mut self, deliver_tx_request: Bytes) -> response::DeliverTx {
         tracing::trace!("delivering tx");
         let mut state = self.current_state.lock().await;
@@ -323,29 +321,23 @@ impl Service<Request> for App<EmptyRelayer> {
     fn call(&mut self, req: Request) -> Self::Future {
         tracing::info!(?req);
 
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .unwrap();
-
         let rsp = match req {
             // handled messages
-            Request::Info(_) => Response::Info(runtime.block_on(self.info())),
-            Request::Query(query) => Response::Query(runtime.block_on(self.query(query))),
+            Request::Info(_) => Response::Info(executor::block_on(self.info())),
+            Request::Query(query) => Response::Query(executor::block_on(self.query(query))),
             Request::DeliverTx(deliver_tx) => {
-                Response::DeliverTx(runtime.block_on(self.deliver_tx(deliver_tx.tx)))
+                Response::DeliverTx(executor::block_on(self.deliver_tx(deliver_tx.tx)))
             }
-            Request::Commit => Response::Commit(runtime.block_on(self.commit())),
+            Request::EndBlock(end_block) => {
+                Response::EndBlock(executor::block_on(self.end_block(end_block)))
+            }
+            Request::Commit => Response::Commit(executor::block_on(self.commit())),
             // unhandled messages
             Request::Flush => Response::Flush,
             Request::Echo(_) => Response::Echo(Default::default()),
             Request::InitChain(_) => Response::InitChain(Default::default()),
             Request::BeginBlock(_) => Response::BeginBlock(Default::default()),
             Request::CheckTx(_) => Response::CheckTx(Default::default()),
-            Request::EndBlock(end_block) => {
-                Response::EndBlock(runtime.block_on(self.end_block(end_block)))
-            }
             Request::ListSnapshots => Response::ListSnapshots(Default::default()),
             Request::OfferSnapshot(_) => Response::OfferSnapshot(Default::default()),
             Request::LoadSnapshotChunk(_) => Response::LoadSnapshotChunk(Default::default()),
@@ -356,58 +348,9 @@ impl Service<Request> for App<EmptyRelayer> {
                 info: String::from("N/A"),
             }),
         };
+
+        println!("Response: {:?}", rsp);
         tracing::info!(?rsp);
         async move { Ok(rsp) }.boxed()
     }
-}
-
-#[derive(Debug, StructOpt)]
-struct Opt {
-    /// Bind the TCP server to this host.
-    #[structopt(short, long, default_value = "127.0.0.1")]
-    host: String,
-
-    /// Bind the TCP server to this port.
-    #[structopt(short, long, default_value = "26658")]
-    port: u16,
-}
-
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt::init();
-    let opt = Opt::from_args();
-
-    // Construct our ABCI application.
-    let service = App::default();
-
-    // Split it into components.
-    let (consensus, mempool, snapshot, info) = split::service(service, 1);
-
-    // Hand those components to the ABCI server, but customize request behavior
-    // for each category -- for instance, apply load-shedding only to mempool
-    // and info requests, but not to consensus requests.
-    let server = Server::builder()
-        .consensus(consensus)
-        .snapshot(snapshot)
-        .mempool(
-            ServiceBuilder::new()
-                .load_shed()
-                .buffer(10)
-                .service(mempool),
-        )
-        .info(
-            ServiceBuilder::new()
-                .load_shed()
-                .buffer(100)
-                .rate_limit(50, std::time::Duration::from_secs(1))
-                .service(info),
-        )
-        .finish()
-        .unwrap();
-
-    // Run the ABCI server.
-    server
-        .listen(format!("{}:{}", opt.host, opt.port))
-        .await
-        .unwrap();
 }

@@ -1,0 +1,175 @@
+package main
+
+import (
+	"context"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	rollconf "github.com/celestiaorg/rollmint/config"
+	rollconv "github.com/celestiaorg/rollmint/conv"
+	rollnode "github.com/celestiaorg/rollmint/node"
+	rollrpc "github.com/celestiaorg/rollmint/rpc"
+	"github.com/spf13/viper"
+	abcicli "github.com/tendermint/tendermint/abci/client"
+	cfg "github.com/tendermint/tendermint/config"
+	tmflags "github.com/tendermint/tendermint/libs/cli/flags"
+	"github.com/tendermint/tendermint/libs/log"
+	tmnode "github.com/tendermint/tendermint/node"
+	"github.com/tendermint/tendermint/p2p"
+	"github.com/tendermint/tendermint/privval"
+)
+
+var configFile string
+var namespaceId string
+var daStartHeight uint64
+var address string
+var transport string
+
+func init() {
+	flag.StringVar(&configFile, "config", "$HOME/.tendermint/config/config.toml", "Path to config.toml")
+	flag.StringVar(&namespaceId, "namespace_id", "0000000000000000,", "namespace id to use")
+	flag.Uint64Var(&daStartHeight, "da_start_height", 0, "height to start at when querying blocks")
+	flag.StringVar(&address, "address", "tcp://0.0.0.0:26660,", "address of application socket")
+	flag.StringVar(&transport, "transport", "socket", "either socket or grpc")
+
+}
+
+func main() {
+	client, err := abcicli.NewClient(address, transport, true)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v", err)
+		os.Exit(1)
+	}
+	// app := NewABCIRelayer(client)
+
+	flag.Parse()
+
+	node, server, err := newRollup(client, configFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v", err)
+		os.Exit(1)
+	}
+
+	err = server.Start()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v", err)
+		os.Exit(2)
+	}
+
+	node.Start()
+	defer func() {
+		node.Stop()
+		node.Wait()
+	}()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	<-c
+	os.Exit(0)
+}
+
+func newRollup(client abcicli.Client, configFile string) (*rollnode.Node, *rollrpc.Server, error) {
+	// read config
+	config := cfg.DefaultConfig()
+	config.RootDir = filepath.Dir(filepath.Dir(configFile))
+	viper.SetConfigFile(configFile)
+	if err := viper.ReadInConfig(); err != nil {
+		return nil, nil, fmt.Errorf("viper failed to read config file: %w", err)
+	}
+	if err := viper.Unmarshal(config); err != nil {
+		return nil, nil, fmt.Errorf("viper failed to unmarshal config: %w", err)
+	}
+	if err := config.ValidateBasic(); err != nil {
+		return nil, nil, fmt.Errorf("config is invalid: %w", err)
+	}
+
+	bytes, err := hex.DecodeString(namespaceId)
+	if err != nil {
+		return nil, nil, err
+	}
+	// translate tendermint config to rollmint config
+	nodeConfig := rollconf.NodeConfig{
+		Aggregator: true,
+		BlockManagerConfig: rollconf.BlockManagerConfig{
+			BlockTime:     5 * time.Second,
+			FraudProofs:   false,
+			DAStartHeight: daStartHeight,
+		},
+		DALayer:  "celestia",
+		DAConfig: `{"base_url":"http://localhost:26659","timeout":60000000000,"gas_limit":6000000,"fee":6000}`,
+	}
+	copy(nodeConfig.NamespaceID[:], bytes)
+
+	rollconv.GetNodeConfig(&nodeConfig, config)
+	if err := rollconv.TranslateAddresses(&nodeConfig); err != nil {
+		return nil, nil, err
+	}
+
+	// create logger
+	logger := log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+	logger, err = tmflags.ParseLogLevel(config.LogLevel, logger, cfg.DefaultLogLevel)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse log level: %w", err)
+	}
+
+	// read private validator
+	pv := privval.LoadFilePV(
+		config.PrivValidatorKeyFile(),
+		config.PrivValidatorStateFile(),
+	)
+
+	// read node key
+	nodeKey, err := p2p.LoadNodeKey(config.NodeKeyFile())
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load node's key: %w", err)
+	}
+
+	// keys in rollmint format
+	p2pKey, err := rollconv.GetNodeKey(nodeKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	signingKey, err := rollconv.GetNodeKey(&p2p.NodeKey{PrivKey: pv.Key.PrivKey})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	genDocProvider := tmnode.DefaultGenesisDocProviderFunc(config)
+	genDoc, err := genDocProvider()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// // get ABCI client
+	// client, err := proxy.NewLocalClientCreator(app).NewABCIClient()
+	// if err != nil {
+	// 	return nil, nil, err
+	// }
+
+	fmt.Println("Starting Rollmint node...")
+
+	// create node
+	node, err := rollnode.NewNode(
+		context.Background(),
+		nodeConfig,
+		p2pKey,
+		signingKey,
+		client,
+		genDoc,
+		logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create new Rollmint node: %w", err)
+	}
+
+	fmt.Println("Starting RPC server...")
+
+	server := rollrpc.NewServer(node, config.RPC, logger)
+
+	return node, server, nil
+}
