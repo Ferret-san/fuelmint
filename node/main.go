@@ -16,13 +16,14 @@ import (
 	rollnode "github.com/celestiaorg/rollmint/node"
 	rollrpc "github.com/celestiaorg/rollmint/rpc"
 	"github.com/spf13/viper"
-	abcicli "github.com/tendermint/tendermint/abci/client"
+	abci "github.com/tendermint/tendermint/abci/types"
 	cfg "github.com/tendermint/tendermint/config"
 	tmflags "github.com/tendermint/tendermint/libs/cli/flags"
 	"github.com/tendermint/tendermint/libs/log"
 	tmnode "github.com/tendermint/tendermint/node"
 	"github.com/tendermint/tendermint/p2p"
 	"github.com/tendermint/tendermint/privval"
+	"github.com/tendermint/tendermint/proxy"
 )
 
 var configFile string
@@ -35,22 +36,17 @@ func init() {
 	flag.StringVar(&configFile, "config", "$HOME/.tendermint/config/config.toml", "Path to config.toml")
 	flag.StringVar(&namespaceId, "namespace_id", "0000000000000000,", "namespace id to use")
 	flag.Uint64Var(&daStartHeight, "da_start_height", 0, "height to start at when querying blocks")
-	flag.StringVar(&address, "address", "tcp://0.0.0.0:26660,", "address of application socket")
+	flag.StringVar(&address, "address", "tcp://0.0.0.0:26658,", "address of application socket")
 	flag.StringVar(&transport, "transport", "socket", "either socket or grpc")
 
 }
 
 func main() {
-	client, err := abcicli.NewClient(address, transport, true)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v", err)
-		os.Exit(1)
-	}
-	// app := NewABCIRelayer(client)
-
 	flag.Parse()
 
-	node, server, err := newRollup(client, configFile)
+	app := NewABCIRelayer(address, true)
+
+	node, server, err := newRollup(app, configFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
 		os.Exit(1)
@@ -74,7 +70,7 @@ func main() {
 	os.Exit(0)
 }
 
-func newRollup(client abcicli.Client, configFile string) (*rollnode.Node, *rollrpc.Server, error) {
+func newRollup(app abci.Application, configFile string) (*rollnode.Node, *rollrpc.Server, error) {
 	// read config
 	config := cfg.DefaultConfig()
 	config.RootDir = filepath.Dir(filepath.Dir(configFile))
@@ -146,13 +142,13 @@ func newRollup(client abcicli.Client, configFile string) (*rollnode.Node, *rollr
 		return nil, nil, err
 	}
 
-	// // get ABCI client
-	// client, err := proxy.NewLocalClientCreator(app).NewABCIClient()
-	// if err != nil {
-	// 	return nil, nil, err
-	// }
+	// get ABCI client
+	client, err := proxy.NewLocalClientCreator(app).NewABCIClient()
+	if err != nil {
+		return nil, nil, err
+	}
 
-	fmt.Println("Starting Rollmint node...")
+	fmt.Println("Starting Rollmint Node...")
 
 	// create node
 	node, err := rollnode.NewNode(
@@ -167,8 +163,7 @@ func newRollup(client abcicli.Client, configFile string) (*rollnode.Node, *rollr
 		return nil, nil, fmt.Errorf("failed to create new Rollmint node: %w", err)
 	}
 
-	fmt.Println("Starting RPC server...")
-
+	fmt.Println("Starting RPC Server...")
 	server := rollrpc.NewServer(node, config.RPC, logger)
 
 	return node, server, nil

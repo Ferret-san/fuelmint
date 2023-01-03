@@ -4,11 +4,13 @@ go 1.18
 
 require (
 	github.com/celestiaorg/rollmint v0.5.0
+	github.com/dgraph-io/badger v1.6.2
 	github.com/spf13/viper v1.14.0
 	github.com/tendermint/tendermint v0.34.21
 )
 
 require (
+	github.com/AndreasBriese/bbloom v0.0.0-20190825152654-46b345b51c96 // indirect
 	github.com/DataDog/zstd v1.4.5 // indirect
 	github.com/Workiva/go-datastructures v1.0.53 // indirect
 	github.com/benbjohnson/clock v1.3.0 // indirect

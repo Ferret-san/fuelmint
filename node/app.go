@@ -13,9 +13,9 @@ type ABCIRelayer struct {
 
 var _ abcitypes.Application = (*ABCIRelayer)(nil)
 
-func NewABCIRelayer(client abcicli.Client) *ABCIRelayer {
+func NewABCIRelayer(addr string, mustConnect bool) *ABCIRelayer {
 	return &ABCIRelayer{
-		client: client,
+		client: abcicli.NewSocketClient(addr, mustConnect),
 	}
 }
 
