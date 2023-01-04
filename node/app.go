@@ -19,6 +19,10 @@ func NewABCIRelayer(addr string, mustConnect bool) *ABCIRelayer {
 	}
 }
 
+func (app *ABCIRelayer) Start() {
+	go app.client.Start()
+}
+
 func (app *ABCIRelayer) Info(req abcitypes.RequestInfo) abcitypes.ResponseInfo {
 	res, err := app.client.InfoSync(req)
 	if err != nil {

@@ -321,6 +321,7 @@ impl Service<Request> for App<EmptyRelayer> {
     fn call(&mut self, req: Request) -> Self::Future {
         tracing::info!(?req);
 
+        print!("Request {:?}", req);
         let rsp = match req {
             // handled messages
             Request::Info(_) => Response::Info(executor::block_on(self.info())),

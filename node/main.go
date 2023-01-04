@@ -46,6 +46,8 @@ func main() {
 
 	app := NewABCIRelayer(address, true)
 
+	app.Start()
+
 	node, server, err := newRollup(app, configFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
