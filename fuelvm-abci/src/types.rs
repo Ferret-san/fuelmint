@@ -81,9 +81,11 @@ impl<Relayer: RelayerTrait> App<Relayer> {
     }
 
     /// Create the header for a new block at the provided height
-    async fn new_header(&self, height: BlockHeight) -> Result<PartialFuelBlockHeader> {
-        let state = self.current_state.lock().await;
-        let previous_block_info = state.previous_block_info(height)?;
+    async fn new_header(
+        &self,
+        previous_block_info: PreviousBlockInfo,
+        height: BlockHeight,
+    ) -> Result<PartialFuelBlockHeader> {
         let new_da_height = self
             .select_new_da_height(previous_block_info.da_height)
             .await?;
@@ -139,7 +141,8 @@ impl<Relayer: RelayerTrait> App<Relayer> {
             .unwrap();
 
         let is_script = tx.is_script();
-        let header = self.new_header(height).await.unwrap();
+        let previous_block_info = state.previous_block_info(height)?;
+        let header = self.new_header(previous_block_info, height).await.unwrap();
         let block = PartialFuelBlock::new(header, vec![tx].into_iter().collect());
 
         let result: Vec<_> = state
@@ -209,11 +212,11 @@ impl<Relayer: RelayerTrait> App<Relayer> {
         // Set block height
         current_state.block_height = end_block_request.height;
 
+        let height = BlockHeight::from(current_state.block_height as u64);
+
+        let previous_block_info = current_state.previous_block_info(height).unwrap();
         // Create a partial fuel block header
-        let header = self
-            .new_header(BlockHeight::from(current_state.block_height as u64))
-            .await
-            .unwrap();
+        let header = self.new_header(previous_block_info, height).await.unwrap();
 
         // Build a block for exeuction using the header and our vec of transactions
         let block = PartialFuelBlock::new(header, current_state.transactions.clone());
