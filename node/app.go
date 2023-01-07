@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	abcicli "github.com/tendermint/tendermint/abci/client"
 	abcitypes "github.com/tendermint/tendermint/abci/types"
 )
@@ -13,21 +15,25 @@ type ABCIRelayer struct {
 
 var _ abcitypes.Application = (*ABCIRelayer)(nil)
 
-func NewABCIRelayer(addr string, mustConnect bool) *ABCIRelayer {
-	return &ABCIRelayer{
-		client: abcicli.NewSocketClient(addr, mustConnect),
+func NewABCIRelayer(addr string) *ABCIRelayer {
+	client := abcicli.NewSocketClient(addr, true)
+	if err := client.Start(); err != nil {
+		panic(err)
 	}
-}
-
-func (app *ABCIRelayer) Start() {
-	go app.client.Start()
+	return &ABCIRelayer{
+		client: client,
+	}
 }
 
 func (app *ABCIRelayer) Info(req abcitypes.RequestInfo) abcitypes.ResponseInfo {
+	fmt.Println("Calling InfoSync...")
 	res, err := app.client.InfoSync(req)
+	app.client.FlushSync()
+	fmt.Println("Called InfoSync!")
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println("Returning response...")
 	return *res
 }
 
@@ -70,19 +76,21 @@ func (app *ABCIRelayer) Query(reqQuery abcitypes.RequestQuery) (resQuery abcityp
 }
 
 func (app *ABCIRelayer) InitChain(req abcitypes.RequestInitChain) abcitypes.ResponseInitChain {
-	res, err := app.client.InitChainSync(req)
-	if err != nil {
-		panic(err)
-	}
-	return *res
+	// res, err := app.client.InitChainSync(req)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// return *res
+	return abcitypes.ResponseInitChain{}
 }
 
 func (app *ABCIRelayer) BeginBlock(req abcitypes.RequestBeginBlock) abcitypes.ResponseBeginBlock {
-	res, err := app.client.BeginBlockSync(req)
-	if err != nil {
-		panic(err)
-	}
-	return *res
+	// res, err := app.client.BeginBlockSync(req)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// return *res
+	return abcitypes.ResponseBeginBlock{}
 }
 
 func (app *ABCIRelayer) EndBlock(req abcitypes.RequestEndBlock) abcitypes.ResponseEndBlock {

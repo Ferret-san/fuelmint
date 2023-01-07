@@ -20,10 +20,10 @@ import (
 	cfg "github.com/tendermint/tendermint/config"
 	tmflags "github.com/tendermint/tendermint/libs/cli/flags"
 	"github.com/tendermint/tendermint/libs/log"
-	tmnode "github.com/tendermint/tendermint/node"
 	"github.com/tendermint/tendermint/p2p"
 	"github.com/tendermint/tendermint/privval"
 	"github.com/tendermint/tendermint/proxy"
+	tmtypes "github.com/tendermint/tendermint/types"
 )
 
 var configFile string
@@ -36,17 +36,15 @@ func init() {
 	flag.StringVar(&configFile, "config", "$HOME/.tendermint/config/config.toml", "Path to config.toml")
 	flag.StringVar(&namespaceId, "namespace_id", "0000000000000000,", "namespace id to use")
 	flag.Uint64Var(&daStartHeight, "da_start_height", 0, "height to start at when querying blocks")
-	flag.StringVar(&address, "address", "tcp://0.0.0.0:26658,", "address of application socket")
+	flag.StringVar(&address, "address", "tcp://0.0.0.0:26658", "address of application socket")
 	flag.StringVar(&transport, "transport", "socket", "either socket or grpc")
-
 }
 
 func main() {
 	flag.Parse()
 
-	app := NewABCIRelayer(address, true)
-
-	app.Start()
+	fmt.Printf("config file: %#v\n", configFile)
+	app := NewABCIRelayer(address)
 
 	node, server, err := newRollup(app, configFile)
 	if err != nil {
@@ -138,11 +136,29 @@ func newRollup(app abci.Application, configFile string) (*rollnode.Node, *rollrp
 		return nil, nil, err
 	}
 
-	genDocProvider := tmnode.DefaultGenesisDocProviderFunc(config)
-	genDoc, err := genDocProvider()
+	fmt.Printf("Genesis file path: %#v\n", config.GenesisFile())
+	genesisDoc, err := tmtypes.GenesisDocFromFile(config.GenesisFile())
 	if err != nil {
 		return nil, nil, err
 	}
+
+	genDoc := &tmtypes.GenesisDoc{
+		GenesisTime:     genesisDoc.GenesisTime,
+		ChainID:         genesisDoc.ChainID,
+		InitialHeight:   0,
+		ConsensusParams: genesisDoc.ConsensusParams,
+		Validators:      genesisDoc.Validators,
+		AppHash:         genesisDoc.AppHash,
+		AppState:        genesisDoc.AppState,
+	}
+
+	// Figure out issue with end_block when data is missing
+	// Figure out why the initial height is being set to 1 for no reason
+	// TODO: figure out how to read the genDoc
+	// Correctly change Height to 0
+	// test things out with tomasz data folder
+
+	fmt.Printf("Genesis doc initial height: %#v\n", genDoc.InitialHeight)
 
 	// get ABCI client
 	client, err := proxy.NewLocalClientCreator(app).NewABCIClient()
@@ -159,7 +175,15 @@ func newRollup(app abci.Application, configFile string) (*rollnode.Node, *rollrp
 		p2pKey,
 		signingKey,
 		client,
-		genDoc,
+		&tmtypes.GenesisDoc{
+			GenesisTime:     genesisDoc.GenesisTime,
+			ChainID:         genesisDoc.ChainID,
+			InitialHeight:   0,
+			ConsensusParams: genesisDoc.ConsensusParams,
+			Validators:      genesisDoc.Validators,
+			AppHash:         genesisDoc.AppHash,
+			AppState:        genesisDoc.AppState,
+		},
 		logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create new Rollmint node: %w", err)

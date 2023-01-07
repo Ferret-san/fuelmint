@@ -208,11 +208,11 @@ impl<Relayer: RelayerTrait> App<Relayer> {
     async fn end_block(&mut self, end_block_request: EndBlock) -> response::EndBlock {
         tracing::trace!("ending block");
         let mut current_state = self.current_state.lock().await;
-
         // Set block height
         current_state.block_height = end_block_request.height;
 
         let height = BlockHeight::from(current_state.block_height as u64);
+        println!("Height: {:?}", height);
 
         let previous_block_info = current_state.previous_block_info(height).unwrap();
         // Create a partial fuel block header
@@ -324,7 +324,7 @@ impl Service<Request> for App<EmptyRelayer> {
     fn call(&mut self, req: Request) -> Self::Future {
         tracing::info!(?req);
 
-        print!("Request {:?}", req);
+        println!("Request {:?}", req);
         let rsp = match req {
             // handled messages
             Request::Info(_) => Response::Info(executor::block_on(self.info())),
