@@ -76,21 +76,26 @@ func (app *ABCIRelayer) Query(reqQuery abcitypes.RequestQuery) (resQuery abcityp
 }
 
 func (app *ABCIRelayer) InitChain(req abcitypes.RequestInitChain) abcitypes.ResponseInitChain {
-	// res, err := app.client.InitChainSync(req)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// return *res
-	return abcitypes.ResponseInitChain{}
+	res, err := app.client.InitChainSync(req)
+	if err != nil {
+		panic(err)
+	}
+	return *res
 }
 
 func (app *ABCIRelayer) BeginBlock(req abcitypes.RequestBeginBlock) abcitypes.ResponseBeginBlock {
-	// res, err := app.client.BeginBlockSync(req)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// return *res
-	return abcitypes.ResponseBeginBlock{}
+	// There's a serialization edge case at height 1 that will cause
+	// the tower-abci server to return an error.
+	// so we opt for not relaying that request
+	if req.Header.Height == 1 {
+		return abcitypes.ResponseBeginBlock{}
+	} else {
+		res, err := app.client.BeginBlockSync(req)
+		if err != nil {
+			panic(err)
+		}
+		return *res
+	}
 }
 
 func (app *ABCIRelayer) EndBlock(req abcitypes.RequestEndBlock) abcitypes.ResponseEndBlock {
