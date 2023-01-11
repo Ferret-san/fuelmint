@@ -136,37 +136,16 @@ func newRollup(app abci.Application, configFile string) (*rollnode.Node, *rollrp
 		return nil, nil, err
 	}
 
-	fmt.Printf("Genesis file path: %#v\n", config.GenesisFile())
 	genesisDoc, err := tmtypes.GenesisDocFromFile(config.GenesisFile())
 	if err != nil {
 		return nil, nil, err
 	}
-
-	genDoc := &tmtypes.GenesisDoc{
-		GenesisTime:     genesisDoc.GenesisTime,
-		ChainID:         genesisDoc.ChainID,
-		InitialHeight:   0,
-		ConsensusParams: genesisDoc.ConsensusParams,
-		Validators:      genesisDoc.Validators,
-		AppHash:         genesisDoc.AppHash,
-		AppState:        genesisDoc.AppState,
-	}
-
-	// Figure out issue with end_block when data is missing
-	// Figure out why the initial height is being set to 1 for no reason
-	// TODO: figure out how to read the genDoc
-	// Correctly change Height to 0
-	// test things out with tomasz data folder
-
-	fmt.Printf("Genesis doc initial height: %#v\n", genDoc.InitialHeight)
 
 	// get ABCI client
 	client, err := proxy.NewLocalClientCreator(app).NewABCIClient()
 	if err != nil {
 		return nil, nil, err
 	}
-
-	fmt.Println("Starting Rollmint Node...")
 
 	// create node
 	node, err := rollnode.NewNode(
@@ -175,21 +154,12 @@ func newRollup(app abci.Application, configFile string) (*rollnode.Node, *rollrp
 		p2pKey,
 		signingKey,
 		client,
-		&tmtypes.GenesisDoc{
-			GenesisTime:     genesisDoc.GenesisTime,
-			ChainID:         genesisDoc.ChainID,
-			InitialHeight:   0,
-			ConsensusParams: genesisDoc.ConsensusParams,
-			Validators:      genesisDoc.Validators,
-			AppHash:         genesisDoc.AppHash,
-			AppState:        genesisDoc.AppState,
-		},
+		genesisDoc,
 		logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create new Rollmint node: %w", err)
 	}
 
-	fmt.Println("Starting RPC Server...")
 	server := rollrpc.NewServer(node, config.RPC, logger)
 
 	return node, server, nil

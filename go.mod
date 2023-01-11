@@ -170,5 +170,3 @@ require (
 )
 
 replace github.com/tendermint/tendermint => github.com/celestiaorg/tendermint v0.34.22-0.20221013213714-8be9b54c8c21
-
-replace github.com/celestiaorg/rollmint => /home/dferrer/repos/rollmint

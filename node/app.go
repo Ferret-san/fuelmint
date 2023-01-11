@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-
 	abcicli "github.com/tendermint/tendermint/abci/client"
 	abcitypes "github.com/tendermint/tendermint/abci/types"
 )
@@ -26,14 +24,10 @@ func NewABCIRelayer(addr string) *ABCIRelayer {
 }
 
 func (app *ABCIRelayer) Info(req abcitypes.RequestInfo) abcitypes.ResponseInfo {
-	fmt.Println("Calling InfoSync...")
 	res, err := app.client.InfoSync(req)
-	app.client.FlushSync()
-	fmt.Println("Called InfoSync!")
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("Returning response...")
 	return *res
 }
 

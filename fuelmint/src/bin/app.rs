@@ -1,5 +1,6 @@
-use fuelvm_abci::types::App;
+use fuelvm_abci::{graph_api::start_server, types::App};
 use structopt::StructOpt;
+use tokio::{sync::oneshot, task::JoinHandle};
 use tower::ServiceBuilder;
 use tower_abci::{split, Server};
 
@@ -14,20 +15,19 @@ struct Opt {
     port: u16,
 }
 
+// TODO
+// Add function to initialize state from genesis if there's any
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
     let opt = Opt::from_args();
 
-    println!("Constructing ABCI application...");
     // Construct our ABCI application.
     let service = App::default();
 
-    println!("Spliting ABCI application into service components...");
     // Split it into components.
     let (consensus, mempool, snapshot, info) = split::service(service, 1);
 
-    println!("Handing components to the ABCI server...");
     // Hand those components to the ABCI server, but customize request behavior
     // for each category -- for instance, apply load-shedding only to mempool
     // and info requests, but not to consensus requests.
@@ -56,4 +56,15 @@ async fn main() {
         .listen(format!("{}:{}", opt.host, opt.port))
         .await
         .unwrap();
+
+    // Use persistent storage to start the graphql service
+    // let (stop_tx, stop_rx) = oneshot::channel::<()>();
+
+    // let (bound_address, api_server) = start_server(
+    //     service.current_state.executor.producer.config.clone(),
+    //     service.current_state.executor.producer.database,
+    //     stop_rx,
+    // )
+    // .await
+    // .unwrap();
 }

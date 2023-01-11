@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::executor::*;
+use crate::executor::Executor;
 
 use anyhow::Result;
 
@@ -121,19 +121,16 @@ impl State {
     pub fn previous_block_info(&self, height: BlockHeight) -> Result<PreviousBlockInfo> {
         // block 0 is reserved for genesis
         if height == 0u32.into() {
-            println!("Reserved for Genesis");
             Err(GenesisBlock.into())
         }
         // if this is the first block, fill in base metadata from genesis
         else if height == 1u32.into() {
-            println!("Block Height 1");
             // TODO: what should initial genesis data be here?
             Ok(PreviousBlockInfo {
                 prev_root: Default::default(),
                 da_height: Default::default(),
             })
         } else {
-            println!("Getting info from previous block...");
             // get info from previous block height
             let prev_height = height - 1u32.into();
             let previous_block = self
