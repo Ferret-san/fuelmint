@@ -17,6 +17,7 @@ struct Opt {
 
 // TODO
 // Add function to initialize state from genesis if there's any
+// Use RocksDB and instantiate ABCI server app + RPC
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();

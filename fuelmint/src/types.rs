@@ -53,7 +53,7 @@ use fuel_core_interfaces::common::{
 #[derive(Clone)]
 pub struct App<Relayer: RelayerTrait> {
     pub committed_state: Arc<Mutex<State>>,
-    pub current_state: State,
+    pub current_state: Arc<Mutex<State>>,
     pub relayer: Option<Relayer>,
 }
 
@@ -61,7 +61,7 @@ impl<Relayer: RelayerTrait> Default for App<Relayer> {
     fn default() -> Self {
         Self {
             committed_state: Arc::new(Mutex::new(State::default())),
-            current_state: State::default(),
+            current_state: Arc::new(Mutex::new(State::default())),
             relayer: None,
         }
     }
@@ -70,7 +70,7 @@ impl<Relayer: RelayerTrait> Default for App<Relayer> {
 impl<Relayer: RelayerTrait> App<Relayer> {
     pub fn new(state: State, relayer: Relayer) -> Self {
         let committed_state = Arc::new(Mutex::new(state.clone()));
-        let current_state = state;
+        let current_state = Arc::new(Mutex::new(state));
 
         App {
             committed_state,
@@ -81,7 +81,7 @@ impl<Relayer: RelayerTrait> App<Relayer> {
 
     pub fn new_empty(state: State) -> Self {
         let committed_state = Arc::new(Mutex::new(state.clone()));
-        let current_state = state;
+        let current_state = Arc::new(Mutex::new(state));
 
         App {
             committed_state,
@@ -141,7 +141,7 @@ impl<Relayer: RelayerTrait> App<Relayer> {
     }
 
     async fn dry_run(&self, tx: Transaction) -> Result<Vec<Receipt>> {
-        let state = &self.current_state;
+        let state = self.current_state.lock().await;
 
         let height = state
             .executor
@@ -176,7 +176,7 @@ impl<Relayer: RelayerTrait> App<Relayer> {
 
 impl<Relayer: RelayerTrait> App<Relayer> {
     async fn info(&self) -> response::Info {
-        let state = &self.current_state;
+        let state = self.current_state.lock().await;
 
         response::Info {
             data: "fuelmint".to_string(),
@@ -190,22 +190,13 @@ impl<Relayer: RelayerTrait> App<Relayer> {
     // TODO: Add CheckTx for basic requirements like signatures (maybe check inputs and outputs?)
     async fn deliver_tx(&mut self, deliver_tx_request: Bytes) -> response::DeliverTx {
         tracing::trace!("delivering tx");
+        let mut state = self.current_state.lock().await;
 
         let tx: Transaction = FuelTx::from_bytes(&deliver_tx_request).unwrap();
-        // match serde_json::from_slice(&deliver_tx_request) {
-        //     Ok(tx) => tx,
-        //     Err(_) => {
-        //         tracing::error!("could not decode request");
-        //         return response::DeliverTx {
-        //             data: "could not decode request".into(),
-        //             ..Default::default()
-        //         };
-        //     }
-        // };
 
         let tx_string = tx.to_json();
         // Ad tx to our list of transactions to be executed
-        self.current_state.transactions.push(tx);
+        state.transactions.push(tx);
 
         tracing::trace!("tx delivered");
 
@@ -217,25 +208,25 @@ impl<Relayer: RelayerTrait> App<Relayer> {
 
     async fn end_block(&mut self, end_block_request: EndBlock) -> response::EndBlock {
         tracing::trace!("ending block");
+        let mut current_state = self.current_state.lock().await;
         // Set block height
-        self.current_state.block_height = end_block_request.height;
+        current_state.block_height = end_block_request.height;
 
-        let height = BlockHeight::from(self.current_state.block_height as u64);
+        let height = BlockHeight::from(current_state.block_height as u64);
 
-        let previous_block_info = self.current_state.previous_block_info(height).unwrap();
+        let previous_block_info = current_state.previous_block_info(height).unwrap();
         // Create a partial fuel block header
         let header = self.new_header(previous_block_info, height).await.unwrap();
 
         // Build a block for exeuction using the header and our vec of transactions
-        let block = PartialFuelBlock::new(header, self.current_state.transactions.clone());
+        let block = PartialFuelBlock::new(header, current_state.transactions.clone());
 
         // Store the context string incase we error.
         let context_string = format!(
             "Failed to produce block {:?} due to execution failure",
             block
         );
-        let result = self
-            .current_state
+        let result = current_state
             .executor
             .producer
             .execute(ExecutionBlock::Production(block))
@@ -245,15 +236,16 @@ impl<Relayer: RelayerTrait> App<Relayer> {
         tracing::trace!("done executing the block");
         tracing::debug!("Produced block with result: {:?}", &result);
         // Clear the transactions vec
-        self.current_state.transactions.clear();
+        current_state.transactions.clear();
         // Should I make an event that returns the Execution Result?
         response::EndBlock::default()
     }
 
     async fn commit(&mut self) -> response::Commit {
         tracing::trace!("taking lock");
+        let current_state = self.current_state.lock().await.clone();
         let mut committed_state = self.committed_state.lock().await;
-        *committed_state = self.current_state.clone();
+        *committed_state = current_state;
         tracing::trace!("committed");
 
         response::Commit {
@@ -263,6 +255,7 @@ impl<Relayer: RelayerTrait> App<Relayer> {
     }
 
     async fn query(&self, query_request: RequestQuery) -> response::Query {
+        let state = self.current_state.lock().await;
         let query: Query = match serde_json::from_slice(&query_request.data) {
             Ok(tx) => tx,
             // no-op just logger
@@ -281,7 +274,7 @@ impl<Relayer: RelayerTrait> App<Relayer> {
                 QueryResponse::Receipts(result)
             }
             Query::Balance(address, asset_id) => QueryResponse::Balance(
-                self.current_state
+                state
                     .balance(
                         address.to_string().as_str(),
                         Some(asset_id.to_string().as_str()),
@@ -289,7 +282,7 @@ impl<Relayer: RelayerTrait> App<Relayer> {
                     .unwrap(),
             ),
             Query::ContractBalance(contract_id, asset_id) => QueryResponse::ContractBalance(
-                self.current_state
+                state
                     .contract_balance(
                         contract_id.to_string().as_str(),
                         Some(asset_id.to_string().as_str()),
