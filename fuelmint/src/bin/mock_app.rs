@@ -1,23 +1,13 @@
-use anyhow::{anyhow, Context as ContextTrait, Result};
-use fuel_core::schema::scalars::HexString;
 use fuel_core::{
     chain_config::{CoinConfig, MessageConfig, StateConfig},
-    service::{Config, FuelService},
-};
-use fuel_core_interfaces::common::{
-    fuel_tx::{Cacheable, Transaction as FuelTx},
-    fuel_vm::prelude::Deserializable,
+    service::Config,
 };
 use fuel_core_interfaces::{
-    common::{
-        fuel_tx::{AssetId, Input, Output},
-        fuel_vm::prelude::Address,
-    },
+    common::{fuel_tx::AssetId, fuel_vm::prelude::Address},
     model::DaBlockHeight,
 };
 use fuelvm_abci::{state::State, types::App};
 use structopt::StructOpt;
-use tokio::{sync::oneshot, task::JoinHandle};
 use tower::ServiceBuilder;
 use tower_abci::{split, Server};
 

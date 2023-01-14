@@ -45,19 +45,26 @@ impl TxMutation {
         tx: HexString,
     ) -> async_graphql::Result<types::Transaction> {
         // Send request through broadcast_tx
-        let hex_string = &tx.to_string();
-        println!("Transaction: {:?}", hex_string);
-        let mut tx = FuelTx::from_bytes(&hex::decode(tx.to_string()).unwrap())?;
-        tx.precompute();
+        let hex_string = tx.to_string();
+        let tx = hex_string.strip_prefix("0x").unwrap();
+        println!("Transaction: {:?}", tx);
+        let mut fuel_tx = FuelTx::from_bytes(&hex::decode(tx).unwrap())?;
+        println!("Transaction: {:?}", fuel_tx);
+        println!("Precomputing transaction...");
+        fuel_tx.precompute();
 
+        println!("Sending request to rollmint...");
         let client = reqwest::Client::new();
-        client
+        let res = client
             .get(format!("{}/broadcast_tx", "http://127.0.0.1:26658"))
-            .query(&[("tx", &hex_string)])
+            .query(&[("tx", &fuel_tx)])
             .send()
             .await?;
 
-        let tx = types::Transaction::from(tx);
-        Ok(tx)
+        println!("response: {:?}", res);
+
+        let fuel_tx = types::Transaction::from(fuel_tx);
+        println!("returning transaction...");
+        Ok(fuel_tx)
     }
 }

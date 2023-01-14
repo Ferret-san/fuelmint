@@ -45,8 +45,7 @@ use fuel_tx::{Receipt, Transaction};
 use fuel_block_producer::db::BlockProducerDatabase;
 
 use fuel_core_interfaces::common::{
-    fuel_tx::{Cacheable, Transaction as FuelTx},
-    fuel_vm::prelude::Deserializable,
+    fuel_tx::Transaction as FuelTx, fuel_vm::prelude::Deserializable,
 };
 
 // The Application
@@ -68,14 +67,14 @@ impl<Relayer: RelayerTrait> Default for App<Relayer> {
 }
 
 impl<Relayer: RelayerTrait> App<Relayer> {
-    pub fn new(state: State, relayer: Relayer) -> Self {
+    pub fn new(state: State, relayer: Option<Relayer>) -> Self {
         let committed_state = Arc::new(Mutex::new(state.clone()));
         let current_state = Arc::new(Mutex::new(state));
 
         App {
             committed_state,
             current_state,
-            relayer: Some(relayer),
+            relayer: relayer,
         }
     }
 
@@ -323,13 +322,16 @@ impl Service<Request> for App<EmptyRelayer> {
     fn call(&mut self, req: Request) -> Self::Future {
         tracing::info!(?req);
 
-        println!("Request {:?}", req);
         let rsp = match req {
             // handled messages
             Request::Info(_) => Response::Info(executor::block_on(self.info())),
             Request::Query(query) => Response::Query(executor::block_on(self.query(query))),
             Request::DeliverTx(deliver_tx) => {
-                Response::DeliverTx(executor::block_on(self.deliver_tx(deliver_tx.tx)))
+                println!("DeliverTx Request {:?}", deliver_tx);
+                let response =
+                    Response::DeliverTx(executor::block_on(self.deliver_tx(deliver_tx.tx)));
+                println!("DeliverTx Response {:?}", response);
+                response
             }
             Request::EndBlock(end_block) => {
                 Response::EndBlock(executor::block_on(self.end_block(end_block)))

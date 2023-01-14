@@ -27,6 +27,7 @@ use fuel_block_producer::db::BlockProducerDatabase;
 pub struct State {
     pub block_height: i64,
     pub app_hash: Vec<u8>,
+    // Might make sense to run a fuel_tx_pool instead?
     pub transactions: Vec<Transaction>,
     pub executor: Executor,
 }
