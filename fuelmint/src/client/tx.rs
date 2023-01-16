@@ -29,6 +29,7 @@ impl TxMutation {
         // for read-only calls.
         utxo_validation: Option<bool>,
     ) -> async_graphql::Result<Vec<receipt::Receipt>> {
+        // Modify to use App's dry_run function
         let block_producer = ctx.data_unchecked::<Arc<dyn BlockProducer>>();
 
         let mut tx = FuelTx::from_bytes(&hex::decode(tx.to_string()).unwrap())?;
@@ -47,7 +48,7 @@ impl TxMutation {
         // Send request through broadcast_tx
         let hex_string = tx.to_string();
         let tx = hex_string.strip_prefix("0x").unwrap();
-        println!("Transaction: {:?}", tx);
+        println!("Transaction String: {:?}", tx);
         let mut fuel_tx = FuelTx::from_bytes(&hex::decode(tx).unwrap())?;
         println!("Transaction: {:?}", fuel_tx);
         println!("Precomputing transaction...");
@@ -56,12 +57,12 @@ impl TxMutation {
         println!("Sending request to rollmint...");
         let client = reqwest::Client::new();
         let res = client
-            .get(format!("{}/broadcast_tx", "http://127.0.0.1:26658"))
-            .query(&[("tx", &fuel_tx)])
+            .get(format!("{}/broadcast_tx", "http://127.0.0.1:26657"))
+            .query(&[("tx", &tx)])
             .send()
             .await?;
 
-        println!("response: {:?}", res);
+        println!("Response from rollmint: {:?}", res);
 
         let fuel_tx = types::Transaction::from(fuel_tx);
         println!("returning transaction...");
