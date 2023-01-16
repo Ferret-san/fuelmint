@@ -20,7 +20,7 @@ use axum::{
 use fuel_core::{
     database::Database,
     schema::dap,
-    service::{metrics::metrics, Config},
+    service::{metrics::metrics, modules::Modules, Config},
 };
 use futures::Stream;
 use serde_json::json;
@@ -34,17 +34,16 @@ use tracing::info;
 pub async fn start_server(
     config: Config,
     db: Database,
-    // modules: &Modules,
+    modules: &Modules,
     stop: oneshot::Receiver<()>,
 ) -> Result<(SocketAddr, JoinHandle<Result<()>>)> {
     let network_addr = config.addr;
     let params = config.chain_conf.transaction_parameters;
-    let schema = build_schema().data(config).data(db);
-    // .data(modules.txpool.clone())
-    // .data(modules.block_importer.clone())
-    // .data(modules.block_producer.clone())
-    // .data(modules.sync.clone())
-    // .data(modules.coordinator.clone());
+    let schema = build_schema()
+        .data(config)
+        .data(db)
+        .data(modules.txpool.clone());
+    // look into modifying dry_run or adding the required data to the schema
     let schema = dap::init(schema, params).extension(Tracing).finish();
 
     let router = Router::new()

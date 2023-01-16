@@ -13,7 +13,7 @@ use fuel_core_interfaces::{
     model::{BlockHeight, DaBlockHeight},
 };
 
-use fuel_tx::{Bytes32, Transaction};
+use fuel_tx::Bytes32;
 
 use fuel_core::{
     database::resource::{AssetQuery, AssetSpendTarget},
@@ -27,8 +27,6 @@ use fuel_block_producer::db::BlockProducerDatabase;
 pub struct State {
     pub block_height: i64,
     pub app_hash: Vec<u8>,
-    // Might make sense to run a fuel_tx_pool instead?
-    pub transactions: Vec<Transaction>,
     pub executor: Executor,
 }
 
@@ -37,7 +35,6 @@ impl Default for State {
         Self {
             block_height: 0,
             app_hash: Vec::new(),
-            transactions: Vec::new(),
             executor: Executor::default(),
         }
     }

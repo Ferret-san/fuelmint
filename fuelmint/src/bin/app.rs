@@ -1,9 +1,18 @@
 use fuel_core::{
     database::Database,
     executor::Executor as FuelExecutor,
-    service::config::{Config, DbType},
+    service::{
+        config::{Config, DbType},
+        modules::start_modules,
+    },
 };
-use fuelvm_abci::{executor::Executor, graph_api::start_server, state::State, types::App};
+use fuel_core_interfaces::model::DaBlockHeight;
+use fuelvm_abci::{
+    executor::Executor,
+    graph_api::start_server,
+    state::State,
+    types::{App, EmptyRelayer},
+};
 use std::{
     net::{Ipv4Addr, SocketAddr},
     panic,
@@ -44,7 +53,6 @@ async fn main() {
     println!("Database path {:?}", config.database_path);
     let database = Database::open(&config.database_path).unwrap();
 
-    // Build executor
     let fuel_executor = FuelExecutor {
         database: database.clone(),
         config: config.clone(),
@@ -54,12 +62,20 @@ async fn main() {
     let state = State {
         block_height: 0,
         app_hash: Vec::new(),
-        transactions: Vec::new(),
         executor,
     };
 
+    let modules = start_modules(&config, &database).await.unwrap();
+
     // Construct our ABCI application.
-    let service = App::new(state, None);
+    let service = App::new(
+        config.clone(),
+        state,
+        modules.txpool.clone(),
+        EmptyRelayer {
+            zero_height: DaBlockHeight(0),
+        },
+    );
 
     // Split it into components.
     let (consensus, mempool, snapshot, info) = split::service(service, 1);
@@ -94,9 +110,10 @@ async fn main() {
 
     let (_stop_graphql_api, stop_graphql_rx) = oneshot::channel::<()>();
 
-    let (bound_address, _api_server) = start_server(config.clone(), database, stop_graphql_rx)
-        .await
-        .unwrap();
+    let (bound_address, _api_server) =
+        start_server(config.clone(), database, &modules, stop_graphql_rx)
+            .await
+            .unwrap();
 
     // let (_shutdown, stop_rx) = oneshot::channel::<()>();
 

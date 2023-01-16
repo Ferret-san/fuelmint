@@ -30,6 +30,7 @@ fuel-tx = "0.23.1"
 fuel-core-interfaces = { git = "https://github.com/Ferret-san/fuel-core", branch = "fuelmint-0.14.1" }
 fuel-block-producer = { git = "https://github.com/Ferret-san/fuel-core", branch = "fuelmint-0.14.1" }
 fuel-gql-client = { git = "https://github.com/Ferret-san/fuel-core", branch = "fuelmint-0.14.1" }
+fuel-txpool = { git = "https://github.com/Ferret-san/fuel-core", branch = "fuelmint-0.14.1" }
 serde_json = "1.0.82"
 serde = { version = "1.0.138", features = ["derive"] }
 eyre = "0.6.8"

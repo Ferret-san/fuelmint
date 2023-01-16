@@ -12,6 +12,9 @@ use crate::queries::*;
 
 use anyhow::{anyhow, Context as ContextTrait, Result};
 
+use fuel_core::service::Config;
+
+use itertools::Itertools;
 use tokio::sync::Mutex;
 
 use bytes::Bytes;
@@ -40,56 +43,46 @@ use fuel_core_interfaces::{
     },
 };
 
-use fuel_tx::{Receipt, Transaction};
+use fuel_tx::{Cacheable, Receipt, Transaction};
 
-use fuel_block_producer::db::BlockProducerDatabase;
+use fuel_txpool::Service as TxPoolService;
 
 use fuel_core_interfaces::common::{
     fuel_tx::Transaction as FuelTx, fuel_vm::prelude::Deserializable,
 };
 
-// The Application
-#[derive(Clone)]
+use fuel_block_producer::{
+    adapters::transaction_selector::select_transactions, db::BlockProducerDatabase, ports::TxPool,
+};
+
 pub struct App<Relayer: RelayerTrait> {
+    pub config: Config,
     pub committed_state: Arc<Mutex<State>>,
     pub current_state: Arc<Mutex<State>>,
-    pub relayer: Option<Relayer>,
-}
-
-impl<Relayer: RelayerTrait> Default for App<Relayer> {
-    fn default() -> Self {
-        Self {
-            committed_state: Arc::new(Mutex::new(State::default())),
-            current_state: Arc::new(Mutex::new(State::default())),
-            relayer: None,
-        }
-    }
+    pub tx_pool: Arc<TxPoolService>,
+    pub relayer: Relayer,
 }
 
 impl<Relayer: RelayerTrait> App<Relayer> {
-    pub fn new(state: State, relayer: Option<Relayer>) -> Self {
+    pub fn new(
+        config: Config,
+        state: State,
+        tx_pool: Arc<TxPoolService>,
+        relayer: Relayer,
+    ) -> Self {
         let committed_state = Arc::new(Mutex::new(state.clone()));
         let current_state = Arc::new(Mutex::new(state));
 
         App {
+            config,
             committed_state,
             current_state,
-            relayer: relayer,
+            tx_pool: tx_pool,
+            relayer,
         }
     }
 
-    pub fn new_empty(state: State) -> Self {
-        let committed_state = Arc::new(Mutex::new(state.clone()));
-        let current_state = Arc::new(Mutex::new(state));
-
-        App {
-            committed_state,
-            current_state,
-            relayer: None,
-        }
-    }
-
-    /// Create the header for a new block at the provided height
+    // Create the header for a new block at the provided height
     async fn new_header(
         &self,
         previous_block_info: PreviousBlockInfo,
@@ -119,24 +112,17 @@ impl<Relayer: RelayerTrait> App<Relayer> {
         &self,
         previous_da_height: DaBlockHeight,
     ) -> Result<DaBlockHeight> {
-        match &self.relayer {
-            Some(relayer) => {
-                let best_height = relayer.get_best_finalized_da_height().await?;
-                if best_height < previous_da_height {
-                    // If this happens, it could mean a block was erroneously imported
-                    // without waiting for our relayer's da_height to catch up to imported da_height.
-                    return Err(InvalidDaFinalizationState {
-                        best: best_height,
-                        previous_block: previous_da_height,
-                    }
-                    .into());
-                }
-                Ok(best_height)
+        let best_height = self.relayer.get_best_finalized_da_height().await?;
+        if best_height < previous_da_height {
+            // If this happens, it could mean a block was erroneously imported
+            // without waiting for our relayer's da_height to catch up to imported da_height.
+            return Err(InvalidDaFinalizationState {
+                best: best_height,
+                previous_block: previous_da_height,
             }
-            // If we do not have a relayer, we can just return zero
-            // Meaning we dont process deposits/withdrawals or messages from some settlement layer / L1
-            None => Ok(DaBlockHeight::from(0u64)),
+            .into());
         }
+        Ok(best_height)
     }
 
     async fn dry_run(&self, tx: Transaction) -> Result<Vec<Receipt>> {
@@ -187,20 +173,31 @@ impl<Relayer: RelayerTrait> App<Relayer> {
     }
 
     // TODO: Add CheckTx for basic requirements like signatures (maybe check inputs and outputs?)
+
     async fn deliver_tx(&mut self, deliver_tx_request: Bytes) -> response::DeliverTx {
         tracing::trace!("delivering tx");
-        let mut state = self.current_state.lock().await;
 
-        let tx: Transaction = FuelTx::from_bytes(&deliver_tx_request).unwrap();
+        let tx_pool = &self.tx_pool;
 
-        let tx_string = tx.to_json();
+        let mut tx: Transaction = FuelTx::from_bytes(&deliver_tx_request).unwrap();
+
+        tx.precompute();
+        let _: Vec<_> = tx_pool
+            .sender()
+            .insert(vec![Arc::new(tx.clone())])
+            .await
+            .unwrap()
+            .into_iter()
+            .try_collect()
+            .unwrap();
+
         // Ad tx to our list of transactions to be executed
-        state.transactions.push(tx);
+        // state.transactions.push(tx);
 
         tracing::trace!("tx delivered");
 
         response::DeliverTx {
-            data: Bytes::from(tx_string),
+            data: Bytes::from(tx.to_json()),
             ..Default::default()
         }
     }
@@ -208,17 +205,43 @@ impl<Relayer: RelayerTrait> App<Relayer> {
     async fn end_block(&mut self, end_block_request: EndBlock) -> response::EndBlock {
         tracing::trace!("ending block");
         let mut current_state = self.current_state.lock().await;
+        println!("Got current state lock");
         // Set block height
         current_state.block_height = end_block_request.height;
 
         let height = BlockHeight::from(current_state.block_height as u64);
+
+        println!("Producing new block...");
+        // // Produce block for the new height
+        // let result = self
+        //     .producer
+        //     .produce_and_execute_block(height, self.config.chain_conf.block_gas_limit)
+        //     .await;
+        // println!("Produced new block!");
+
+        println!("Getting sender...");
+        let sender = self.tx_pool.sender();
+
+        println!("Getting includable transactions");
+        let includable = sender.includable().await.unwrap();
+        println!("Getting best transactions for the block");
+        let best_transactions =
+            select_transactions(includable, self.config.chain_conf.block_gas_limit);
+
+        println!("Got best transactions: {:?}", best_transactions);
 
         let previous_block_info = current_state.previous_block_info(height).unwrap();
         // Create a partial fuel block header
         let header = self.new_header(previous_block_info, height).await.unwrap();
 
         // Build a block for exeuction using the header and our vec of transactions
-        let block = PartialFuelBlock::new(header, current_state.transactions.clone());
+        let block = PartialFuelBlock::new(
+            header,
+            best_transactions
+                .into_iter()
+                .map(|tx| tx.as_ref().into())
+                .collect(),
+        );
 
         // Store the context string incase we error.
         let context_string = format!(
@@ -235,7 +258,7 @@ impl<Relayer: RelayerTrait> App<Relayer> {
         tracing::trace!("done executing the block");
         tracing::debug!("Produced block with result: {:?}", &result);
         // Clear the transactions vec
-        current_state.transactions.clear();
+        // current_state.transactions.clear();
         // Should I make an event that returns the Execution Result?
         response::EndBlock::default()
     }
@@ -321,7 +344,7 @@ impl Service<Request> for App<EmptyRelayer> {
 
     fn call(&mut self, req: Request) -> Self::Future {
         tracing::info!(?req);
-
+        println!("Request: {:?}", req);
         let rsp = match req {
             // handled messages
             Request::Info(_) => Response::Info(executor::block_on(self.info())),

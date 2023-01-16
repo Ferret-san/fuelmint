@@ -1822,6 +1822,7 @@ dependencies = [
  "fuel-core-interfaces",
  "fuel-gql-client",
  "fuel-tx",
+ "fuel-txpool",
  "fuel-vm",
  "futures",
  "hex",
