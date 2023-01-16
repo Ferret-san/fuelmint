@@ -219,14 +219,14 @@ impl<Relayer: RelayerTrait> App<Relayer> {
         //     .await;
         // println!("Produced new block!");
 
-        println!("Getting sender...");
-        let sender = self.tx_pool.sender();
+        println!("Getting best transactions...");
 
-        println!("Getting includable transactions");
-        let includable = sender.includable().await.unwrap();
-        println!("Getting best transactions for the block");
-        let best_transactions =
-            select_transactions(includable, self.config.chain_conf.block_gas_limit);
+        let best_transactions = fuel_block_producer::adapters::TxPoolAdapter {
+            sender: self.tx_pool.sender().clone(),
+        }
+        .get_includable_txs(height, self.config.chain_conf.block_gas_limit)
+        .await
+        .unwrap();
 
         println!("Got best transactions: {:?}", best_transactions);
 
