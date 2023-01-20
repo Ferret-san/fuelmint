@@ -1,24 +1,14 @@
 use fuel_core::{
     database::Database,
-    executor::Executor as FuelExecutor,
-    service::{
-        config::{Config, DbType},
-        modules::start_modules,
-    },
+    service::config::{Config, DbType},
 };
-use fuel_core_interfaces::model::DaBlockHeight;
-use fuelvm_abci::{
-    executor::Executor,
-    graph_api::start_server,
-    state::State,
-    types::{App, EmptyRelayer},
-};
+use fuel_core_services::Service;
+use fuelmint::{service, state::State, sub_services, types::App, FuelmintService};
 use std::{
     net::{Ipv4Addr, SocketAddr},
     panic,
 };
 use structopt::StructOpt;
-use tokio::sync::oneshot;
 use tower::ServiceBuilder;
 use tower_abci::{split, Server};
 
@@ -52,78 +42,75 @@ async fn main() {
 
     println!("Database path {:?}", config.database_path);
     let database = Database::open(&config.database_path).unwrap();
+    // instantiate the FuelmintService
+    let (block_producer, server) = service::FuelmintService::from_database(database, config)
+        .await
+        .unwrap();
+    let txpool = Box::new(server.shared.txpool.clone());
 
-    let fuel_executor = FuelExecutor {
-        database: database.clone(),
-        config: config.clone(),
-    };
-    let executor = Executor::new(fuel_executor);
+    let mut state = server.start_and_await().await.unwrap();
+    println!("State after start_and_await: {:?}", state);
+    state = server.await_stop().await.unwrap();
+    println!("State after await_stop: {:?}", state);
+    // // currently the stop signal is being sent immediatly, which shouldn't happen
+    // let status = server.await_stop().await.unwrap();
+    // println!("State after await_stop: {:?}", status);
     // TODO: Get DB type from Config thorugh cli
-    let state = State {
-        block_height: 0,
-        app_hash: Vec::new(),
-        executor,
-    };
-
-    let modules = start_modules(&config, &database).await.unwrap();
+    // let state = State {
+    //     block_height: 0,
+    //     app_hash: Vec::new(),
+    // };
 
     // Construct our ABCI application.
-    let service = App::new(
-        config.clone(),
-        state,
-        modules.txpool.clone(),
-        EmptyRelayer {
-            zero_height: DaBlockHeight(0),
-        },
-    );
+    // let service = App::new(config.clone(), state, block_producer, txpool_adapter);
 
     // Split it into components.
-    let (consensus, mempool, snapshot, info) = split::service(service, 1);
+    // let (consensus, mempool, snapshot, info) = split::service(service, 1);
 
     // Hand those components to the ABCI server, but customize request behavior
     // for each category -- for instance, apply load-shedding only to mempool
     // and info requests, but not to consensus requests.
     // Spawn a task to run the ABCI server
-    let abci_server = tokio::task::spawn(
-        Server::builder()
-            .consensus(consensus)
-            .snapshot(snapshot)
-            .mempool(
-                ServiceBuilder::new()
-                    .load_shed()
-                    .buffer(10)
-                    .service(mempool),
-            )
-            .info(
-                ServiceBuilder::new()
-                    .load_shed()
-                    .buffer(100)
-                    .rate_limit(50, std::time::Duration::from_secs(1))
-                    .service(info),
-            )
-            .finish()
-            .unwrap()
-            .listen(format!("{}:{}", opt.host, opt.port)),
-    );
+    // let abci_server = tokio::task::spawn(
+    //     Server::builder()
+    //         .consensus(consensus)
+    //         .snapshot(snapshot)
+    //         .mempool(
+    //             ServiceBuilder::new()
+    //                 .load_shed()
+    //                 .buffer(10)
+    //                 .service(mempool),
+    //         )
+    //         .info(
+    //             ServiceBuilder::new()
+    //                 .load_shed()
+    //                 .buffer(100)
+    //                 .rate_limit(50, std::time::Duration::from_secs(1))
+    //                 .service(info),
+    //         )
+    //         .finish()
+    //         .unwrap()
+    //         .listen(format!("{}:{}", opt.host, opt.port)),
+    // );
 
-    println!("ABCI server listening on {}::{}", opt.host, opt.port);
+    // println!("ABCI server listening on {}::{}", opt.host, opt.port);
 
-    let (_stop_graphql_api, stop_graphql_rx) = oneshot::channel::<()>();
+    // let (_stop_graphql_api, stop_graphql_rx) = oneshot::channel::<()>();
 
-    let (bound_address, _api_server) =
-        start_server(config.clone(), database, &modules, stop_graphql_rx)
-            .await
-            .unwrap();
+    // let (bound_address, _api_server) =
+    //     start_server(config.clone(), database, &modules, stop_graphql_rx)
+    //         .await
+    //         .unwrap();
 
-    // let (_shutdown, stop_rx) = oneshot::channel::<()>();
+    // // let (_shutdown, stop_rx) = oneshot::channel::<()>();
 
-    println!(
-        "Graphql server listening on {}::{}",
-        bound_address.ip(),
-        bound_address.port()
-    );
+    // println!(
+    //     "Graphql server listening on {}::{}",
+    //     bound_address.ip(),
+    //     bound_address.port()
+    // );
 
-    tokio::select! {
-        x = abci_server => x.unwrap().map_err(|e| anyhow::anyhow!(e)).unwrap()
-    };
+    // tokio::select! {
+    //     x = abci_server => x.unwrap().map_err(|e| anyhow::anyhow!(e)).unwrap()
+    // };
 }

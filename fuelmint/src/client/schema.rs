@@ -33,6 +33,7 @@ pub struct Subscription(tx::TxStatusSubscription);
 
 // Build the CoreSchema
 pub type CoreSchema = Schema<Query, Mutation, Subscription>;
+pub type CoreSchemaBuilder = SchemaBuilder<Query, Mutation, Subscription>;
 
 pub fn build_schema() -> SchemaBuilder<Query, Mutation, Subscription> {
     Schema::build_with_ignore_name_conflicts(

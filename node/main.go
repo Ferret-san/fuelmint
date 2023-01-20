@@ -43,7 +43,6 @@ func init() {
 func main() {
 	flag.Parse()
 
-	fmt.Printf("config file: %#v\n", configFile)
 	app := NewABCIRelayer(address)
 
 	node, server, err := newRollup(app, configFile)

@@ -1,12 +1,11 @@
-use crate::schema::{build_schema, CoreSchema};
-use anyhow::Result;
+use crate::schema::{CoreSchema, CoreSchemaBuilder};
 use async_graphql::{
     extensions::Tracing,
     http::{playground_source, GraphQLPlaygroundConfig},
     Request, Response,
 };
 use axum::{
-    extract::Extension,
+    extract::{DefaultBodyLimit, Extension},
     http::{
         header::{
             ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
@@ -18,33 +17,97 @@ use axum::{
     Json, Router,
 };
 use fuel_core::{
-    database::Database,
-    schema::dap,
-    service::{metrics::metrics, modules::Modules, Config},
+    fuel_core_graphql_api::{
+        service::{BlockProducer, Database, Executor, SharedState, TxPool},
+        Config,
+    },
+    service::metrics::metrics,
 };
+use fuel_core_services::{RunnableService, RunnableTask, StateWatcher};
 use futures::Stream;
 use serde_json::json;
-use std::net::{SocketAddr, TcpListener};
-use tokio::{sync::oneshot, task::JoinHandle};
+use std::{
+    future::Future,
+    net::{SocketAddr, TcpListener},
+    pin::Pin,
+};
 use tokio_stream::StreamExt;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
-use tracing::info;
 
-/// Spawns the api server for this node
-pub async fn start_server(
+pub type Service = fuel_core_services::ServiceRunner<NotInitializedTask>;
+
+pub struct NotInitializedTask {
+    router: Router,
+    listener: TcpListener,
+    bound_address: SocketAddr,
+}
+
+pub struct Task {
+    // Ugly workaround because of https://github.com/hyperium/hyper/issues/2582
+    server: Pin<Box<dyn Future<Output = hyper::Result<()>> + Send + 'static>>,
+}
+
+#[async_trait::async_trait]
+impl RunnableService for NotInitializedTask {
+    const NAME: &'static str = "GraphQL";
+
+    type SharedData = SharedState;
+    type Task = Task;
+
+    fn shared_data(&self) -> Self::SharedData {
+        SharedState {
+            bound_address: self.bound_address,
+        }
+    }
+
+    async fn into_task(self, state: &StateWatcher) -> anyhow::Result<Self::Task> {
+        let mut state = state.clone();
+        let server = axum::Server::from_tcp(self.listener)
+            .unwrap()
+            .serve(self.router.into_make_service())
+            .with_graceful_shutdown(async move {
+                loop {
+                    state.changed().await.expect("The service is destroyed");
+
+                    if !state.borrow().started() {
+                        return;
+                    }
+                }
+            });
+
+        Ok(Task {
+            server: Box::pin(server),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl RunnableTask for Task {
+    async fn run(&mut self, _: &mut StateWatcher) -> anyhow::Result<bool> {
+        self.server.as_mut().await?;
+        // The `axum::Server` has its internal loop. If `await` is finished, we get an internal
+        // error or stop signal.
+        Ok(false /* should_continue */)
+    }
+}
+
+pub fn new_service(
     config: Config,
-    db: Database,
-    modules: &Modules,
-    stop: oneshot::Receiver<()>,
-) -> Result<(SocketAddr, JoinHandle<Result<()>>)> {
+    database: Database,
+    schema: CoreSchemaBuilder,
+    producer: BlockProducer,
+    txpool: TxPool,
+    executor: Executor,
+) -> anyhow::Result<Service> {
     let network_addr = config.addr;
-    let params = config.chain_conf.transaction_parameters;
-    let schema = build_schema()
+    let schema = schema
         .data(config)
-        .data(db)
-        .data(modules.txpool.clone());
-    // look into modifying dry_run or adding the required data to the schema
-    let schema = dap::init(schema, params).extension(Tracing).finish();
+        .data(database)
+        .data(producer)
+        .data(txpool)
+        .data(executor)
+        .extension(Tracing)
+        .finish();
 
     let router = Router::new()
         .route("/playground", get(graphql_playground))
@@ -68,29 +131,19 @@ pub async fn start_server(
         .layer(SetResponseHeaderLayer::<_>::overriding(
             ACCESS_CONTROL_ALLOW_HEADERS,
             HeaderValue::from_static("*"),
-        ));
+        ))
+        .layer(DefaultBodyLimit::disable());
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
     let listener = TcpListener::bind(network_addr)?;
-    let bound_addr = listener.local_addr().unwrap();
+    let bound_address = listener.local_addr()?;
 
-    info!("Binding GraphQL provider to {}", bound_addr);
-    let handle = tokio::spawn(async move {
-        let server = axum::Server::from_tcp(listener)
-            .unwrap()
-            .serve(router.into_make_service())
-            .with_graceful_shutdown(async move {
-                let _ = stop.await;
-            });
+    tracing::info!("Binding GraphQL provider to {}", bound_address);
 
-        tx.send(()).unwrap();
-        server.await.map_err(Into::into)
-    });
-
-    // wait until the server is ready
-    rx.await.unwrap();
-
-    Ok((bound_addr, handle))
+    Ok(Service::new(NotInitializedTask {
+        router,
+        listener,
+        bound_address,
+    }))
 }
 
 async fn graphql_playground() -> impl IntoResponse {
@@ -108,13 +161,13 @@ async fn graphql_handler(schema: Extension<CoreSchema>, req: Json<Request>) -> J
 async fn graphql_subscription_handler(
     schema: Extension<CoreSchema>,
     req: Json<Request>,
-) -> Sse<impl Stream<Item = Result<Event, serde_json::Error>>> {
+) -> Sse<impl Stream<Item = anyhow::Result<Event, serde_json::Error>>> {
     let stream = schema
         .execute_stream(req.0)
         .map(|r| Ok(Event::default().json_data(r).unwrap()));
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().text("keep-alive-text"))
 }
 
-async fn ok() -> Result<(), ()> {
+async fn ok() -> anyhow::Result<(), ()> {
     Ok(())
 }
