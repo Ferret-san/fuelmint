@@ -3,7 +3,7 @@ use fuel_core::{
     service::config::{Config, DbType},
 };
 use fuel_core_services::Service;
-use fuelmint::{service, state::State, sub_services, types::App, FuelmintService};
+use fuelmint::{service, state::State, types::App};
 use std::{
     net::{Ipv4Addr, SocketAddr},
     panic,
@@ -43,57 +43,54 @@ async fn main() {
     println!("Database path {:?}", config.database_path);
     let database = Database::open(&config.database_path).unwrap();
     // instantiate the FuelmintService
-    let (block_producer, server) = service::FuelmintService::from_database(database, config)
-        .await
-        .unwrap();
+    let (block_producer, server) = service::FuelmintService::new(database, config.clone()).unwrap();
     let txpool = Box::new(server.shared.txpool.clone());
 
-    let mut state = server.start_and_await().await.unwrap();
-    println!("State after start_and_await: {:?}", state);
-    state = server.await_stop().await.unwrap();
-    println!("State after await_stop: {:?}", state);
-    // // currently the stop signal is being sent immediatly, which shouldn't happen
-    // let status = server.await_stop().await.unwrap();
-    // println!("State after await_stop: {:?}", status);
-    // TODO: Get DB type from Config thorugh cli
-    // let state = State {
-    //     block_height: 0,
-    //     app_hash: Vec::new(),
-    // };
+    // currently the stop signal is being sent immediatly, which shouldn't happen
+
+    let state = State {
+        block_height: 0,
+        app_hash: Vec::new(),
+    };
 
     // Construct our ABCI application.
-    // let service = App::new(config.clone(), state, block_producer, txpool_adapter);
+    let service = App::new(config.clone(), state, block_producer, txpool);
 
     // Split it into components.
-    // let (consensus, mempool, snapshot, info) = split::service(service, 1);
+    let (consensus, mempool, snapshot, info) = split::service(service, 1);
 
     // Hand those components to the ABCI server, but customize request behavior
     // for each category -- for instance, apply load-shedding only to mempool
     // and info requests, but not to consensus requests.
     // Spawn a task to run the ABCI server
-    // let abci_server = tokio::task::spawn(
-    //     Server::builder()
-    //         .consensus(consensus)
-    //         .snapshot(snapshot)
-    //         .mempool(
-    //             ServiceBuilder::new()
-    //                 .load_shed()
-    //                 .buffer(10)
-    //                 .service(mempool),
-    //         )
-    //         .info(
-    //             ServiceBuilder::new()
-    //                 .load_shed()
-    //                 .buffer(100)
-    //                 .rate_limit(50, std::time::Duration::from_secs(1))
-    //                 .service(info),
-    //         )
-    //         .finish()
-    //         .unwrap()
-    //         .listen(format!("{}:{}", opt.host, opt.port)),
-    // );
+    let abci_server = tokio::task::spawn(
+        Server::builder()
+            .consensus(consensus)
+            .snapshot(snapshot)
+            .mempool(
+                ServiceBuilder::new()
+                    .load_shed()
+                    .buffer(10)
+                    .service(mempool),
+            )
+            .info(
+                ServiceBuilder::new()
+                    .load_shed()
+                    .buffer(100)
+                    .rate_limit(50, std::time::Duration::from_secs(1))
+                    .service(info),
+            )
+            .finish()
+            .unwrap()
+            .listen(format!("{}:{}", opt.host, opt.port)),
+    );
 
-    // println!("ABCI server listening on {}::{}", opt.host, opt.port);
+    println!("ABCI server listening on {}::{}", opt.host, opt.port);
+
+    let fuelmint_services = tokio::task::spawn(async move {
+        server.start_and_await().await.unwrap();
+        server.await_stop().await.unwrap();
+    });
 
     // let (_stop_graphql_api, stop_graphql_rx) = oneshot::channel::<()>();
 
@@ -109,8 +106,8 @@ async fn main() {
     //     bound_address.ip(),
     //     bound_address.port()
     // );
-
-    // tokio::select! {
-    //     x = abci_server => x.unwrap().map_err(|e| anyhow::anyhow!(e)).unwrap()
-    // };
+    tokio::select! {
+        x = abci_server => x.unwrap().map_err(|e| anyhow::anyhow!(e)).unwrap(),
+        x = fuelmint_services => x.unwrap()
+    };
 }

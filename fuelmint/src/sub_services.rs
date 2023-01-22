@@ -1,6 +1,6 @@
 #![allow(clippy::let_unit_value)]
 use crate::{
-    client::schema::build_schema, graph_api::new_service, service::SharedState, types::EmptyRelayer,
+    client::schema::build_schema, coordinator, graph_api, service::SharedState, types::EmptyRelayer,
 };
 use fuel_core::service::adapters::P2PAdapter;
 use fuel_core::{
@@ -81,10 +81,11 @@ pub fn init_sub_services(
         dry_run_semaphore: Semaphore::new(max_dry_run_concurrency),
     });
 
-    // TODO: Figure out on how to move it into `fuel-core-graphql-api`.
+    let coordinator = coordinator::new_service(importer_adapter.tx);
+
     let schema =
         init(build_schema(), config.chain_conf.transaction_parameters).data(database.clone());
-    let graph_ql = new_service(
+    let graph_ql = graph_api::new_service(
         GraphQLConfig {
             addr: config.addr,
             utxo_validation: config.utxo_validation,
@@ -117,6 +118,7 @@ pub fn init_sub_services(
     let mut services: SubServices = vec![
         // GraphQL should be shutdown first, so let's start it first.
         Box::new(graph_ql),
+        Box::new(coordinator),
         Box::new(txpool),
     ];
 

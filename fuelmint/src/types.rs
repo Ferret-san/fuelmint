@@ -84,7 +84,7 @@ impl App {
     }
 
     async fn deliver_tx(&mut self, deliver_tx_request: Bytes) -> response::DeliverTx {
-        tracing::trace!("delivering tx");
+        tracing::info!("DELIVERING A TRANSACTIOOOOOOOOOOOOOON");
 
         let tx_pool = self.tx_pool.clone();
 
@@ -117,7 +117,7 @@ impl App {
 
         let height = BlockHeight::from(current_state.block_height as u64);
 
-        println!("Producing new block...");
+        tracing::info!("Producing new block...");
 
         // previous_block_info breaks here at height 1, consider going back to using Executor with custom
         // function, or make a modified branch from fuel-core main to address this issue
@@ -132,8 +132,7 @@ impl App {
         // commit the changes
         db_transaction.commit().unwrap();
 
-        tracing::trace!("done executing the block");
-        tracing::debug!("Produced block with result: {:?}", &result);
+        tracing::info!("New block produced");
 
         // Remove transactions from the txpool
         let mut tx_ids_to_remove = Vec::with_capacity(result.skipped_transactions.len());

@@ -53,6 +53,7 @@ impl FuelmintService {
         config: Config,
     ) -> anyhow::Result<(Box<Arc<Producer<Database>>>, Self)> {
         let (block_producer, service) = Self::new(database, config)?;
+        service.runner.start_and_await().await?;
         Ok((block_producer, service))
     }
 }
@@ -141,8 +142,8 @@ impl RunnableService for Task {
 #[async_trait::async_trait]
 impl RunnableTask for Task {
     async fn run(&mut self, watcher: &mut StateWatcher) -> anyhow::Result<bool> {
-        println!("Running Fuelmint Task!");
         let mut stop_signals = vec![];
+        // need to determine which shutdown signal is causing the issue
         for service in &self.services {
             stop_signals.push(service.await_stop())
         }
@@ -158,8 +159,9 @@ impl RunnableTask for Task {
         // We received the stop signal from any of one source, so stop this service and
         // all sub-services.
         for service in &self.services {
+            let state = service.state();
+            println!("CALLING STOP_AND_AWAIT with state: {:?}", state);
             let result = service.stop_and_await().await;
-
             if let Err(err) = result {
                 tracing::error!(
                     "Got and error during awaiting for stop of the service: {}",
@@ -175,7 +177,6 @@ impl RunnableTask for Task {
 async fn shutdown_signal() -> anyhow::Result<State> {
     #[cfg(unix)]
     {
-        println!("Received a shutdown_sginal");
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
