@@ -7,6 +7,7 @@ use tokio::sync::broadcast;
 // from shutting down
 pub type Service = ServiceRunner<Task>;
 
+#[allow(dead_code)]
 pub struct Task {
     pub(crate) import_block_events_tx: broadcast::Sender<SealedBlock>,
 }

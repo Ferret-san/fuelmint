@@ -111,7 +111,6 @@ impl App {
     async fn end_block(&mut self, end_block_request: EndBlock) -> response::EndBlock {
         tracing::trace!("ending block");
         let mut current_state = self.current_state.lock().await;
-        println!("Got current state lock");
         // Set block height
         current_state.block_height = end_block_request.height;
 

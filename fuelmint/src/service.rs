@@ -135,10 +135,6 @@ impl RunnableService for Task {
     }
 }
 
-// its possible that the Service Runner is not aware of our Task, and thus
-// the task stops immediatly
-// TODO: test with local fuel-core
-
 #[async_trait::async_trait]
 impl RunnableTask for Task {
     async fn run(&mut self, watcher: &mut StateWatcher) -> anyhow::Result<bool> {
@@ -159,8 +155,6 @@ impl RunnableTask for Task {
         // We received the stop signal from any of one source, so stop this service and
         // all sub-services.
         for service in &self.services {
-            let state = service.state();
-            println!("CALLING STOP_AND_AWAIT with state: {:?}", state);
             let result = service.stop_and_await().await;
             if let Err(err) = result {
                 tracing::error!(
