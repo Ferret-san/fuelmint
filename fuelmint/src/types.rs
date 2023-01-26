@@ -8,10 +8,11 @@ use std::{
 
 use crate::state::*;
 
-use crate::queries::*;
+use anyhow::Result;
 
-use anyhow::{anyhow, Context as ContextTrait, Result};
+use fuel_core::{producer::Producer, service::Config};
 
+use itertools::Itertools;
 use tokio::sync::Mutex;
 
 use bytes::Bytes;
@@ -20,7 +21,7 @@ use tower::Service;
 
 use tendermint::{
     abci::{
-        request::{EndBlock, Query as RequestQuery, Request},
+        request::{EndBlock, Request},
         response, Response,
     },
     block::Height,
@@ -28,152 +29,48 @@ use tendermint::{
 
 use tower_abci::BoxError;
 
-//use fuel_core::schema::balance::{Balance, BalanceQuery};
-
-use fuel_core_interfaces::{
-    block_producer::{Error::InvalidDaFinalizationState, Relayer as RelayerTrait},
-    common::tai64::Tai64,
-    executor::{ExecutionBlock, Executor as ExecutorTrait},
-    model::{
-        BlockHeight, DaBlockHeight, FuelApplicationHeader, FuelConsensusHeader, PartialFuelBlock,
-        PartialFuelBlockHeader,
-    },
+use fuel_core_types::{
+    fuel_tx::{Cacheable, Transaction as FuelTx, Transaction},
+    fuel_types::bytes::Deserializable,
 };
 
-use fuel_tx::{Receipt, Transaction};
+use fuel_core_storage::Result as StorageResult;
 
-use fuel_block_producer::db::BlockProducerDatabase;
-
-use fuel_core_interfaces::common::{
-    fuel_tx::Transaction as FuelTx, fuel_vm::prelude::Deserializable,
+use fuel_core::{
+    database::Database,
+    producer::ports::Relayer as RelayerTrait,
+    service::adapters::P2PAdapter,
+    types::blockchain::primitives::{BlockHeight, DaBlockHeight},
 };
 
-// The Application
-#[derive(Clone)]
-pub struct App<Relayer: RelayerTrait> {
+use fuel_tx::UniqueIdentifier;
+
+pub struct App {
+    pub config: Config,
     pub committed_state: Arc<Mutex<State>>,
     pub current_state: Arc<Mutex<State>>,
-    pub relayer: Option<Relayer>,
+    pub producer: Box<Arc<Producer<Database>>>,
+    pub tx_pool: Box<fuel_core_txpool::service::SharedState<P2PAdapter, Database>>,
 }
 
-impl<Relayer: RelayerTrait> Default for App<Relayer> {
-    fn default() -> Self {
-        Self {
-            committed_state: Arc::new(Mutex::new(State::default())),
-            current_state: Arc::new(Mutex::new(State::default())),
-            relayer: None,
-        }
-    }
-}
-
-impl<Relayer: RelayerTrait> App<Relayer> {
-    pub fn new(state: State, relayer: Option<Relayer>) -> Self {
+impl App {
+    pub fn new(
+        config: Config,
+        state: State,
+        producer: Box<Arc<Producer<Database>>>,
+        tx_pool: Box<fuel_core_txpool::service::SharedState<P2PAdapter, Database>>,
+    ) -> Self {
         let committed_state = Arc::new(Mutex::new(state.clone()));
         let current_state = Arc::new(Mutex::new(state));
-
         App {
+            config,
             committed_state,
             current_state,
-            relayer: relayer,
+            producer: producer,
+            tx_pool: tx_pool,
         }
     }
 
-    pub fn new_empty(state: State) -> Self {
-        let committed_state = Arc::new(Mutex::new(state.clone()));
-        let current_state = Arc::new(Mutex::new(state));
-
-        App {
-            committed_state,
-            current_state,
-            relayer: None,
-        }
-    }
-
-    /// Create the header for a new block at the provided height
-    async fn new_header(
-        &self,
-        previous_block_info: PreviousBlockInfo,
-        height: BlockHeight,
-    ) -> Result<PartialFuelBlockHeader> {
-        let new_da_height = self
-            .select_new_da_height(previous_block_info.da_height)
-            .await?;
-
-        Ok(PartialFuelBlockHeader {
-            application: FuelApplicationHeader {
-                da_height: new_da_height,
-                generated: Default::default(),
-            },
-            consensus: FuelConsensusHeader {
-                // TODO: this needs to be updated using a proper BMT MMR
-                prev_root: previous_block_info.prev_root,
-                height,
-                time: Tai64::now(),
-                generated: Default::default(),
-            },
-            metadata: None,
-        })
-    }
-
-    async fn select_new_da_height(
-        &self,
-        previous_da_height: DaBlockHeight,
-    ) -> Result<DaBlockHeight> {
-        match &self.relayer {
-            Some(relayer) => {
-                let best_height = relayer.get_best_finalized_da_height().await?;
-                if best_height < previous_da_height {
-                    // If this happens, it could mean a block was erroneously imported
-                    // without waiting for our relayer's da_height to catch up to imported da_height.
-                    return Err(InvalidDaFinalizationState {
-                        best: best_height,
-                        previous_block: previous_da_height,
-                    }
-                    .into());
-                }
-                Ok(best_height)
-            }
-            // If we do not have a relayer, we can just return zero
-            // Meaning we dont process deposits/withdrawals or messages from some settlement layer / L1
-            None => Ok(DaBlockHeight::from(0u64)),
-        }
-    }
-
-    async fn dry_run(&self, tx: Transaction) -> Result<Vec<Receipt>> {
-        let state = self.current_state.lock().await;
-
-        let height = state
-            .executor
-            .producer
-            .database
-            .current_block_height()
-            .unwrap();
-
-        let is_script = tx.is_script();
-        let previous_block_info = state.previous_block_info(height)?;
-        let header = self.new_header(previous_block_info, height).await.unwrap();
-        let block = PartialFuelBlock::new(header, vec![tx].into_iter().collect());
-
-        let result: Vec<_> = state
-            .executor
-            .producer
-            .dry_run(
-                ExecutionBlock::Production(block),
-                Some(state.executor.producer.config.utxo_validation),
-            )
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect();
-
-        if is_script && result.is_empty() {
-            return Err(anyhow!("Expected at least one set of receipts"));
-        }
-        Ok(result)
-    }
-}
-
-impl<Relayer: RelayerTrait> App<Relayer> {
     async fn info(&self) -> response::Info {
         let state = self.current_state.lock().await;
 
@@ -186,114 +83,82 @@ impl<Relayer: RelayerTrait> App<Relayer> {
         }
     }
 
-    // TODO: Add CheckTx for basic requirements like signatures (maybe check inputs and outputs?)
     async fn deliver_tx(&mut self, deliver_tx_request: Bytes) -> response::DeliverTx {
-        tracing::trace!("delivering tx");
-        let mut state = self.current_state.lock().await;
+        let tx_pool = self.tx_pool.clone();
 
-        let tx: Transaction = FuelTx::from_bytes(&deliver_tx_request).unwrap();
+        let mut tx: Transaction = FuelTx::from_bytes(&deliver_tx_request).unwrap();
 
-        let tx_string = tx.to_json();
-        // Ad tx to our list of transactions to be executed
-        state.transactions.push(tx);
+        // Add transaction to the TxPool
+        tx.precompute();
+        let _: Vec<_> = tx_pool
+            .insert(vec![Arc::new(tx.clone())])
+            .into_iter()
+            .try_collect()
+            .unwrap();
 
         tracing::trace!("tx delivered");
 
         response::DeliverTx {
-            data: Bytes::from(tx_string),
+            data: Bytes::from(tx.to_json()),
             ..Default::default()
         }
     }
 
     async fn end_block(&mut self, end_block_request: EndBlock) -> response::EndBlock {
-        tracing::trace!("ending block");
+        tracing::info!("ending block");
         let mut current_state = self.current_state.lock().await;
         // Set block height
         current_state.block_height = end_block_request.height;
 
         let height = BlockHeight::from(current_state.block_height as u64);
 
-        let previous_block_info = current_state.previous_block_info(height).unwrap();
-        // Create a partial fuel block header
-        let header = self.new_header(previous_block_info, height).await.unwrap();
+        tracing::info!("Producing new block...");
 
-        // Build a block for exeuction using the header and our vec of transactions
-        let block = PartialFuelBlock::new(header, current_state.transactions.clone());
-
-        // Store the context string incase we error.
-        let context_string = format!(
-            "Failed to produce block {:?} due to execution failure",
-            block
-        );
-        let result = current_state
-            .executor
+        // previous_block_info breaks here at height 1, consider going back to using Executor with custom
+        // function, or make a modified branch from fuel-core main to address this issue
+        // Is there a need for rollup blocks to be sealed?
+        let (result, db_transaction) = self
             .producer
-            .execute(ExecutionBlock::Production(block))
-            .context(context_string)
-            .unwrap();
+            .produce_and_execute_block(height, self.config.chain_conf.block_gas_limit)
+            .await
+            .unwrap()
+            .into();
 
-        tracing::trace!("done executing the block");
-        tracing::debug!("Produced block with result: {:?}", &result);
-        // Clear the transactions vec
-        current_state.transactions.clear();
-        // Should I make an event that returns the Execution Result?
+        // commit the changes
+        db_transaction.commit().unwrap();
+
+        tracing::info!(
+            "New block produced for height: {:?}",
+            current_state.block_height
+        );
+
+        // Remove transactions from the txpool
+        let mut tx_ids_to_remove = Vec::with_capacity(result.skipped_transactions.len());
+        for (tx, err) in result.skipped_transactions {
+            tracing::error!(
+                "During block production got invalid transaction {:?} with error {:?}",
+                tx,
+                err
+            );
+            tx_ids_to_remove.push(match tx {
+                Transaction::Script(script) => script.id(),
+                Transaction::Create(create) => create.id(),
+                Transaction::Mint(mint) => mint.id(),
+            });
+        }
+        self.tx_pool.remove_txs(tx_ids_to_remove);
+
         response::EndBlock::default()
     }
 
     async fn commit(&mut self) -> response::Commit {
-        tracing::trace!("taking lock");
         let current_state = self.current_state.lock().await.clone();
         let mut committed_state = self.committed_state.lock().await;
         *committed_state = current_state;
-        tracing::trace!("committed");
 
         response::Commit {
             data: Bytes::from(vec![]), // (*committed_state).app_hash.clone(),
             retain_height: 0u32.into(),
-        }
-    }
-
-    async fn query(&self, query_request: RequestQuery) -> response::Query {
-        let state = self.current_state.lock().await;
-        let query: Query = match serde_json::from_slice(&query_request.data) {
-            Ok(tx) => tx,
-            // no-op just logger
-            Err(_) => {
-                return response::Query {
-                    value: "could not decode request".into(),
-                    ..Default::default()
-                };
-            }
-        };
-
-        let res = match query {
-            Query::DryRun(tx) => {
-                let result = self.dry_run(tx).await.unwrap();
-
-                QueryResponse::Receipts(result)
-            }
-            Query::Balance(address, asset_id) => QueryResponse::Balance(
-                state
-                    .balance(
-                        address.to_string().as_str(),
-                        Some(asset_id.to_string().as_str()),
-                    )
-                    .unwrap(),
-            ),
-            Query::ContractBalance(contract_id, asset_id) => QueryResponse::ContractBalance(
-                state
-                    .contract_balance(
-                        contract_id.to_string().as_str(),
-                        Some(asset_id.to_string().as_str()),
-                    )
-                    .unwrap(),
-            ),
-        };
-
-        response::Query {
-            key: query_request.data,
-            value: Bytes::from(serde_json::to_vec(&res).unwrap()),
-            ..Default::default()
         }
     }
 }
@@ -305,12 +170,12 @@ pub struct EmptyRelayer {
 
 #[async_trait::async_trait]
 impl RelayerTrait for EmptyRelayer {
-    async fn get_best_finalized_da_height(&self) -> Result<DaBlockHeight> {
+    async fn get_best_finalized_da_height(&self) -> StorageResult<DaBlockHeight> {
         Ok(self.zero_height)
     }
 }
 
-impl Service<Request> for App<EmptyRelayer> {
+impl Service<Request> for App {
     type Response = Response;
     type Error = BoxError;
     type Future = Pin<Box<dyn Future<Output = Result<Response, BoxError>> + Send + 'static>>;
@@ -321,23 +186,18 @@ impl Service<Request> for App<EmptyRelayer> {
 
     fn call(&mut self, req: Request) -> Self::Future {
         tracing::info!(?req);
-
         let rsp = match req {
             // handled messages
             Request::Info(_) => Response::Info(executor::block_on(self.info())),
-            Request::Query(query) => Response::Query(executor::block_on(self.query(query))),
             Request::DeliverTx(deliver_tx) => {
-                println!("DeliverTx Request {:?}", deliver_tx);
-                let response =
-                    Response::DeliverTx(executor::block_on(self.deliver_tx(deliver_tx.tx)));
-                println!("DeliverTx Response {:?}", response);
-                response
+                Response::DeliverTx(executor::block_on(self.deliver_tx(deliver_tx.tx)))
             }
             Request::EndBlock(end_block) => {
                 Response::EndBlock(executor::block_on(self.end_block(end_block)))
             }
             Request::Commit => Response::Commit(executor::block_on(self.commit())),
             // unhandled messages
+            Request::Query(_) => Response::Query(Default::default()),
             Request::Flush => Response::Flush,
             Request::Echo(_) => Response::Echo(Default::default()),
             Request::InitChain(_) => Response::InitChain(Default::default()),
@@ -354,7 +214,6 @@ impl Service<Request> for App<EmptyRelayer> {
             }),
         };
 
-        println!("Response: {:?}", rsp);
         tracing::info!(?rsp);
         async move { Ok(rsp) }.boxed()
     }

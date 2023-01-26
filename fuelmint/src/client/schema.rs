@@ -23,7 +23,7 @@ pub struct Query(
     resource::ResourceQuery,
 );
 
-// Add the new TxMutations
+// Add the new TxMutation
 #[derive(MergedObject, Default)]
 pub struct Mutation(dap::DapMutation, TxMutation, block::BlockMutation);
 
@@ -33,6 +33,7 @@ pub struct Subscription(tx::TxStatusSubscription);
 
 // Build the CoreSchema
 pub type CoreSchema = Schema<Query, Mutation, Subscription>;
+pub type CoreSchemaBuilder = SchemaBuilder<Query, Mutation, Subscription>;
 
 pub fn build_schema() -> SchemaBuilder<Query, Mutation, Subscription> {
     Schema::build_with_ignore_name_conflicts(

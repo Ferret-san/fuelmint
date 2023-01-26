@@ -1,5 +1,5 @@
 [package]
-name = "fuelvm-abci"
+name = "fuelmint"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 axum = { version = "0.5" }
+clap = { version = "3.2", features = ["derive", "env"] }
 tower-http = { version = "0.3", features = ["set-header", "trace"] }
 async-graphql = { version = "4.0", features = ["tracing"], default-features = false }
 anyhow = "1.0"
@@ -25,11 +26,18 @@ tracing-subscriber = "0.3"
 prost = "0.9"
 tower-abci = { git = "https://github.com/penumbra-zone/tower-abci/", branch = "penumbra-034" }
 fuel-vm = "0.22.2"
-fuel-core = { git = "https://github.com/Ferret-san/fuel-core", branch = "fuelmint-0.14.1" }
+fuel-core = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
+fuel-core-types = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
+fuel-core-storage = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
+fuel-core-txpool = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
+fuel-core-services = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
+fuel-core-chain-config = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
+fuel-core-executor = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
+fuel-core-poa = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
+strum = "0.24"
 fuel-tx = "0.23.1"
-fuel-core-interfaces = { git = "https://github.com/Ferret-san/fuel-core", branch = "fuelmint-0.14.1" }
-fuel-block-producer = { git = "https://github.com/Ferret-san/fuel-core", branch = "fuelmint-0.14.1" }
-fuel-gql-client = { git = "https://github.com/Ferret-san/fuel-core", branch = "fuelmint-0.14.1" }
+lazy_static = "1.4"
+hyper = { version = "0.14" }
 serde_json = "1.0.82"
 serde = { version = "1.0.138", features = ["derive"] }
 eyre = "0.6.8"
@@ -38,3 +46,4 @@ reqwest = "0.11.11"
 itertools = "0.10"
 hex = "0.4"
 dirs = "4.0"
+num_cpus = "1.13"
