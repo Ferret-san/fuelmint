@@ -23,7 +23,7 @@ pub struct Query(
     resource::ResourceQuery,
 );
 
-// Add the new TxMutations
+// Add the new TxMutation
 #[derive(MergedObject, Default)]
 pub struct Mutation(dap::DapMutation, TxMutation, block::BlockMutation);
 

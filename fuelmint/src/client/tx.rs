@@ -39,7 +39,7 @@ impl TxMutation {
         Ok(receipts.iter().map(Into::into).collect())
     }
 
-    /// Submits transaction to the txpool
+    /// Submits transaction to rollkit through broadcast_tx_commit
     async fn submit(
         &self,
         _ctx: &Context<'_>,

@@ -7,7 +7,7 @@ use fuel_core_types::{
 
 use fuel_tx::Bytes32;
 
-/// The app's state, containing a FuelVM
+/// The application state, containing the block_height and the app_hash
 #[derive(Clone, Debug)]
 pub struct State {
     pub block_height: i64,

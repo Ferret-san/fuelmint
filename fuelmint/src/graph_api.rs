@@ -1,3 +1,4 @@
+//! Re-implement graph_api from fuel_core, but with our new schema
 use crate::schema::{CoreSchema, CoreSchemaBuilder};
 use async_graphql::{
     extensions::Tracing,

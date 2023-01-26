@@ -1,3 +1,4 @@
+//! Define the fuelmint service and its state
 use crate::genesis::initialize_state;
 use crate::sub_services;
 use fuel_core::{
@@ -139,7 +140,6 @@ impl RunnableService for Task {
 impl RunnableTask for Task {
     async fn run(&mut self, watcher: &mut StateWatcher) -> anyhow::Result<bool> {
         let mut stop_signals = vec![];
-        // need to determine which shutdown signal is causing the issue
         for service in &self.services {
             stop_signals.push(service.await_stop())
         }

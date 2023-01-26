@@ -22,34 +22,9 @@ pub fn init_sub_services(
     config: &Config,
     database: &Database,
 ) -> anyhow::Result<(Box<Arc<Producer<Database>>>, SubServices, SharedState)> {
-    #[cfg(feature = "relayer")]
-    let relayer = if config.relayer.eth_client.is_some() {
-        Some(fuel_core_relayer::new_service(
-            database.clone(),
-            config.relayer.clone(),
-        )?)
-    } else {
-        None
-    };
-
     let (block_import_tx, _) = broadcast::channel(16);
 
-    #[cfg(feature = "p2p")]
-    let network = {
-        let p2p_db = database.clone();
-
-        let genesis = p2p_db.get_genesis()?;
-        let p2p_config = config.p2p.clone().init(genesis)?;
-
-        fuel_core_p2p::service::new_service(p2p_config, p2p_db)
-    };
-
-    #[cfg(feature = "p2p")]
-    let p2p_adapter = P2PAdapter::new(network.shared.clone());
-    #[cfg(not(feature = "p2p"))]
     let p2p_adapter = P2PAdapter::new();
-
-    let p2p_adapter = p2p_adapter;
 
     let importer_adapter = BlockImportAdapter::new(block_import_tx);
 
@@ -106,10 +81,6 @@ pub fn init_sub_services(
 
     let shared = SharedState {
         txpool: txpool.shared.clone(),
-        #[cfg(feature = "p2p")]
-        network: network.shared.clone(),
-        #[cfg(feature = "relayer")]
-        relayer: relayer.as_ref().map(|r| r.shared.clone()),
         graph_ql: graph_ql.shared.clone(),
     };
 
@@ -121,16 +92,6 @@ pub fn init_sub_services(
         Box::new(coordinator),
         Box::new(txpool),
     ];
-
-    #[cfg(feature = "relayer")]
-    if let Some(relayer) = relayer {
-        services.push(Box::new(relayer));
-    }
-
-    #[cfg(feature = "p2p")]
-    {
-        services.push(Box::new(network));
-    }
 
     Ok((Box::new(block_producer), services, shared))
 }

@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 axum = { version = "0.5" }
+clap = { version = "3.2", features = ["derive", "env"] }
 tower-http = { version = "0.3", features = ["set-header", "trace"] }
 async-graphql = { version = "4.0", features = ["tracing"], default-features = false }
 anyhow = "1.0"
@@ -33,7 +34,9 @@ fuel-core-services = { git = "https://github.com/FuelLabs/fuel-core", rev = "230
 fuel-core-chain-config = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
 fuel-core-executor = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
 fuel-core-poa = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
+strum = "0.24"
 fuel-tx = "0.23.1"
+lazy_static = "1.4"
 hyper = { version = "0.14" }
 serde_json = "1.0.82"
 serde = { version = "1.0.138", features = ["derive"] }

@@ -84,21 +84,17 @@ impl App {
     }
 
     async fn deliver_tx(&mut self, deliver_tx_request: Bytes) -> response::DeliverTx {
-        tracing::info!("DELIVERING A TRANSACTIOOOOOOOOOOOOOON");
-
         let tx_pool = self.tx_pool.clone();
 
         let mut tx: Transaction = FuelTx::from_bytes(&deliver_tx_request).unwrap();
 
+        // Add transaction to the TxPool
         tx.precompute();
         let _: Vec<_> = tx_pool
             .insert(vec![Arc::new(tx.clone())])
             .into_iter()
             .try_collect()
             .unwrap();
-
-        // Ad tx to our list of transactions to be executed
-        // state.transactions.push(tx);
 
         tracing::trace!("tx delivered");
 
@@ -109,7 +105,7 @@ impl App {
     }
 
     async fn end_block(&mut self, end_block_request: EndBlock) -> response::EndBlock {
-        tracing::trace!("ending block");
+        tracing::info!("ending block");
         let mut current_state = self.current_state.lock().await;
         // Set block height
         current_state.block_height = end_block_request.height;
@@ -131,7 +127,10 @@ impl App {
         // commit the changes
         db_transaction.commit().unwrap();
 
-        tracing::info!("New block produced");
+        tracing::info!(
+            "New block produced for height: {:?}",
+            current_state.block_height
+        );
 
         // Remove transactions from the txpool
         let mut tx_ids_to_remove = Vec::with_capacity(result.skipped_transactions.len());
@@ -149,16 +148,13 @@ impl App {
         }
         self.tx_pool.remove_txs(tx_ids_to_remove);
 
-        // Should I make an event that returns the Execution Result?
         response::EndBlock::default()
     }
 
     async fn commit(&mut self) -> response::Commit {
-        tracing::trace!("taking lock");
         let current_state = self.current_state.lock().await.clone();
         let mut committed_state = self.committed_state.lock().await;
         *committed_state = current_state;
-        tracing::trace!("committed");
 
         response::Commit {
             data: Bytes::from(vec![]), // (*committed_state).app_hash.clone(),
