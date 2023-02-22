@@ -2,26 +2,7 @@ use crate::tx::TxMutation;
 
 use async_graphql::{MergedObject, MergedSubscription, Schema, SchemaBuilder};
 
-use fuel_core::schema::{
-    balance, block, chain, coin, contract, dap, health, message, node_info, resource, tx,
-};
-
-// re-use fuel's Query object for the schema
-#[derive(MergedObject, Default)]
-pub struct Query(
-    dap::DapQuery,
-    balance::BalanceQuery,
-    block::BlockQuery,
-    chain::ChainQuery,
-    tx::TxQuery,
-    health::HealthQuery,
-    coin::CoinQuery,
-    contract::ContractQuery,
-    contract::ContractBalanceQuery,
-    node_info::NodeQuery,
-    message::MessageQuery,
-    resource::ResourceQuery,
-);
+use fuel_core::schema::{block, dap, tx, Query};
 
 // Add the new TxMutation
 #[derive(MergedObject, Default)]

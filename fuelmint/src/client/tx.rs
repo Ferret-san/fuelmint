@@ -37,7 +37,7 @@ impl TxMutation {
         let mut tx = FuelTx::from_bytes(&hex::decode(tx.to_string()).unwrap())?;
         tx.precompute();
 
-        let receipts = block_producer.dry_run(tx, None, utxo_validation).await?;
+        let receipts = block_producer.dry_run_tx(tx, None, utxo_validation).await?;
         Ok(receipts.iter().map(Into::into).collect())
     }
 

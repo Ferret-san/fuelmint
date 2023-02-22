@@ -10,7 +10,7 @@ use crate::state::*;
 
 use anyhow::Result;
 
-use fuel_core::{producer::Producer, service::Config};
+use fuel_core::service::Config;
 
 use itertools::Itertools;
 use tokio::sync::Mutex;
@@ -30,26 +30,22 @@ use tendermint::{
 use tower_abci::BoxError;
 
 use fuel_core_types::{
-    fuel_tx::{Cacheable, Transaction as FuelTx, Transaction},
+    fuel_tx::{Cacheable, Transaction as FuelTx, Transaction, UniqueIdentifier},
     fuel_types::bytes::Deserializable,
 };
-
-use fuel_core_storage::Result as StorageResult;
 
 use fuel_core::{
     database::Database,
     producer::ports::Relayer as RelayerTrait,
-    service::adapters::P2PAdapter,
+    service::adapters::{BlockProducerAdapter, P2PAdapter},
     types::blockchain::primitives::{BlockHeight, DaBlockHeight},
 };
-
-use fuel_tx::UniqueIdentifier;
 
 pub struct App {
     pub config: Config,
     pub committed_state: Arc<Mutex<State>>,
     pub current_state: Arc<Mutex<State>>,
-    pub producer: Box<Arc<Producer<Database>>>,
+    pub producer: Box<Arc<BlockProducerAdapter>>,
     pub tx_pool: Box<fuel_core_txpool::service::SharedState<P2PAdapter, Database>>,
 }
 
@@ -57,7 +53,7 @@ impl App {
     pub fn new(
         config: Config,
         state: State,
-        producer: Box<Arc<Producer<Database>>>,
+        producer: Box<Arc<BlockProducerAdapter>>,
         tx_pool: Box<fuel_core_txpool::service::SharedState<P2PAdapter, Database>>,
     ) -> Self {
         let committed_state = Arc::new(Mutex::new(state.clone()));
@@ -117,9 +113,11 @@ impl App {
         // previous_block_info breaks here at height 1, consider going back to using Executor with custom
         // function, or make a modified branch from fuel-core main to address this issue
         // Is there a need for rollup blocks to be sealed?
+        // Look into adding block_time to produce_and_execute_block
         let (result, db_transaction) = self
             .producer
-            .produce_and_execute_block(height, self.config.chain_conf.block_gas_limit)
+            .block_producer
+            .produce_and_execute_block(height, None, self.config.chain_conf.block_gas_limit)
             .await
             .unwrap()
             .into();
@@ -140,11 +138,7 @@ impl App {
                 tx,
                 err
             );
-            tx_ids_to_remove.push(match tx {
-                Transaction::Script(script) => script.id(),
-                Transaction::Create(create) => create.id(),
-                Transaction::Mint(mint) => mint.id(),
-            });
+            tx_ids_to_remove.push(tx.id());
         }
         self.tx_pool.remove_txs(tx_ids_to_remove);
 
@@ -170,7 +164,7 @@ pub struct EmptyRelayer {
 
 #[async_trait::async_trait]
 impl RelayerTrait for EmptyRelayer {
-    async fn get_best_finalized_da_height(&self) -> StorageResult<DaBlockHeight> {
+    async fn wait_for_at_least(&self, _height: &DaBlockHeight) -> anyhow::Result<DaBlockHeight> {
         Ok(self.zero_height)
     }
 }

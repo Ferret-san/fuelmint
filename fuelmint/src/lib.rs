@@ -9,6 +9,3 @@ pub mod types;
 pub use service::*;
 pub mod sub_services;
 pub use sub_services::*;
-pub mod coordinator;
-pub mod genesis;
-pub use coordinator::*;

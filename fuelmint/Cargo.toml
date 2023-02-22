@@ -16,6 +16,7 @@ tendermint-proto = { git = "https://github.com/penumbra-zone/tendermint-rs", bra
 tendermint-rpc = "0.28.0"
 structopt = "0.3.26"
 bytes = "1"
+humantime = "2.1"
 tokio = { version = "1.21.1", features = ["full"]}
 tokio-util = { version = "0.7.4", features = ["codec"] }
 tokio-stream = "0.1"
@@ -27,14 +28,14 @@ tracing-subscriber = "0.3"
 prost = "0.9"
 tower-abci = { git = "https://github.com/penumbra-zone/tower-abci/", branch = "penumbra-034" }
 fuel-vm = "0.22.2"
-fuel-core = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
-fuel-core-types = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
-fuel-core-storage = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
-fuel-core-txpool = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
-fuel-core-services = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
-fuel-core-chain-config = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
-fuel-core-executor = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
-fuel-core-poa = { git = "https://github.com/FuelLabs/fuel-core", rev = "2301e15" }
+fuel-core = "=0.17.2"
+fuel-core-types = "=0.17.2"
+fuel-core-storage = "=0.17.2"
+fuel-core-txpool = "=0.17.2"
+fuel-core-services = "=0.17.2"
+fuel-core-chain-config = "=0.17.2"
+fuel-core-executor = "=0.17.2"
+fuel-core-poa = "=0.17.2"
 strum = "0.24"
 fuel-tx = "0.23.1"
 lazy_static = "1.4"
