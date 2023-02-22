@@ -13,6 +13,7 @@ async-graphql = { version = "4.0", features = ["tracing"], default-features = fa
 anyhow = "1.0"
 tendermint = { git = "https://github.com/penumbra-zone/tendermint-rs", branch = "penumbra-034" }
 tendermint-proto = { git = "https://github.com/penumbra-zone/tendermint-rs", branch = "penumbra-034" }
+tendermint-rpc = "0.28.0"
 structopt = "0.3.26"
 bytes = "1"
 tokio = { version = "1.21.1", features = ["full"]}

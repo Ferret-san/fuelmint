@@ -11,6 +11,8 @@ use fuel_core::fuel_core_graphql_api::service::BlockProducer;
 
 use fuel_core::schema::tx::{receipt, types};
 
+use tendermint_rpc::{endpoint, Request};
+
 #[derive(Default)]
 pub struct TxMutation;
 
@@ -47,14 +49,16 @@ impl TxMutation {
     ) -> async_graphql::Result<types::Transaction> {
         // Send request through broadcast_tx
         let hex_string = tx.to_string();
-        let tx = hex_string.strip_prefix("0x").unwrap();
-        let mut fuel_tx = FuelTx::from_bytes(&hex::decode(tx).unwrap())?;
+        let tx = hex::decode(hex_string.strip_prefix("0x").unwrap()).unwrap();
+        let mut fuel_tx = FuelTx::from_bytes(&tx)?;
         fuel_tx.precompute();
 
+        // Build broadcast_tx_commit request
+        let req = endpoint::broadcast::tx_commit::Request::new(tx);
         let client = reqwest::Client::new();
         client
-            .get(format!("{}/broadcast_tx_commit", "http://127.0.0.1:26657"))
-            .query(&[("tx", &tx)])
+            .post("http://127.0.0.1:26657")
+            .body(req.into_json().into_bytes())
             .send()
             .await?;
 
