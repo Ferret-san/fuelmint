@@ -18,8 +18,9 @@ use axum::{
     Json, Router,
 };
 use fuel_core::{
+    fuel_core_graphql_api::service::ConsensusModule,
     fuel_core_graphql_api::{
-        service::{BlockProducer, Database, Executor, SharedState, TxPool},
+        service::{BlockProducer, Database, SharedState, TxPool},
         Config,
     },
     service::metrics::metrics,
@@ -98,7 +99,7 @@ pub fn new_service(
     schema: CoreSchemaBuilder,
     producer: BlockProducer,
     txpool: TxPool,
-    executor: Executor,
+    consensus_module: ConsensusModule,
 ) -> anyhow::Result<Service> {
     let network_addr = config.addr;
     let schema = schema
@@ -106,7 +107,7 @@ pub fn new_service(
         .data(database)
         .data(producer)
         .data(txpool)
-        .data(executor)
+        .data(consensus_module)
         .extension(Tracing)
         .finish();
 

@@ -1,12 +1,12 @@
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use fuel_core::{
-    chain_config::ChainConfig,
+    chain_config::{default_consensus_dev_key, ChainConfig},
     database::Database,
     producer::Config as ProducerConfig,
     service::{
-        config::{default_consensus_dev_key, Config, DbType, VMConfig},
-        ServiceTrait,
+        config::{Config, DbType, VMConfig},
+        RelayerVerifierConfig, ServiceTrait,
     },
     txpool::Config as TxPoolConfig,
     types::{
@@ -16,6 +16,8 @@ use fuel_core::{
         secrecy::{ExposeSecret, Secret},
     },
 };
+use fuel_core_poa::Trigger;
+use fuel_core_types::blockchain::primitives::DaBlockHeight;
 use fuelmint::{service, state::State, types::App};
 use lazy_static::__Deref;
 use std::str::FromStr;
@@ -129,6 +131,8 @@ impl Command {
         #[cfg(feature = "p2p")]
         let p2p_cfg = p2p_args.into_config(metrics)?;
 
+        let trigger = Trigger::Never;
+
         // if consensus key is not configured, fallback to dev consensus key
         let consensus_key = load_consensus_key(consensus_key)?.or_else(|| {
             if consensus_dev_key {
@@ -156,6 +160,12 @@ impl Command {
             Address::from(*sk.public_key().hash())
         };
 
+        // Create a dummy verifier to comply with Config
+        let verifier = RelayerVerifierConfig {
+            max_da_lag: DaBlockHeight::from(10 as u64),
+            max_wait_time: humantime::parse_duration("30s")?,
+        };
+
         Ok(Config {
             addr,
             database_path,
@@ -163,6 +173,7 @@ impl Command {
             chain_conf: chain_conf.clone(),
             utxo_validation,
             manual_blocks_enabled,
+            block_production: trigger,
             vm: VMConfig {
                 backtrace: vm_backtrace,
             },
@@ -173,7 +184,10 @@ impl Command {
                 metrics,
             },
             block_executor: Default::default(),
+            block_importer: Default::default(),
             consensus_key,
+            name: String::default(),
+            verifier,
         })
     }
 }

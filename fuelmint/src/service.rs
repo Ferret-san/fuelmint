@@ -1,13 +1,17 @@
 //! Define the fuelmint service and its state
-use crate::genesis::initialize_state;
 use crate::sub_services;
 use fuel_core::{
     database::Database,
     fuel_core_graphql_api,
-    producer::Producer,
-    service::{adapters::P2PAdapter, Config, ServiceTrait, SubServices},
+    service::genesis::maybe_initialize_state,
+    service::{
+        adapters::{BlockImporterAdapter, BlockProducerAdapter, P2PAdapter},
+        Config, SubServices,
+    },
 };
-use fuel_core_services::{RunnableService, RunnableTask, ServiceRunner, State, StateWatcher};
+use fuel_core_services::{
+    RunnableService, RunnableTask, Service as ServiceTrait, ServiceRunner, State, StateWatcher,
+};
 use std::{net::SocketAddr, panic, sync::Arc};
 
 #[derive(Clone)]
@@ -16,6 +20,10 @@ pub struct SharedState {
     pub txpool: fuel_core_txpool::service::SharedState<P2PAdapter, Database>,
     /// The GraphQL shared state.
     pub graph_ql: fuel_core_graphql_api::service::SharedState,
+    /// Subscribe to new block production.
+    pub block_importer: BlockImporterAdapter,
+    /// The config of the service.
+    pub config: Config,
 }
 
 pub struct FuelmintService {
@@ -33,7 +41,7 @@ impl FuelmintService {
     pub fn new(
         database: Database,
         config: Config,
-    ) -> anyhow::Result<(Box<Arc<Producer<Database>>>, Self)> {
+    ) -> anyhow::Result<(Box<Arc<BlockProducerAdapter>>, Self)> {
         let (block_producer, task) = Task::new(database, config)?;
         let runner = ServiceRunner::new(task);
         let shared = runner.shared.clone();
@@ -52,7 +60,7 @@ impl FuelmintService {
     pub async fn from_database(
         database: Database,
         config: Config,
-    ) -> anyhow::Result<(Box<Arc<Producer<Database>>>, Self)> {
+    ) -> anyhow::Result<(Box<Arc<BlockProducerAdapter>>, Self)> {
         let (block_producer, service) = Self::new(database, config)?;
         service.runner.start_and_await().await?;
         Ok((block_producer, service))
@@ -102,9 +110,9 @@ impl Task {
     pub fn new(
         database: Database,
         config: Config,
-    ) -> anyhow::Result<(Box<Arc<Producer<Database>>>, Task)> {
+    ) -> anyhow::Result<(Box<Arc<BlockProducerAdapter>>, Task)> {
         // Initialize the state of the chain
-        initialize_state(&config, &database)?;
+        maybe_initialize_state(&config, &database)?;
         // initialize sub services
         let (block_producer, services, shared) =
             sub_services::init_sub_services(&config, &database)?;
